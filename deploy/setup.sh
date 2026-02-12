@@ -48,8 +48,9 @@ restorecon -Rv /opt/kalshi-arb/.venv/bin/ /opt/uv-python/ 2>/dev/null || true
 # Allow nginx to connect to gunicorn (TCP)
 setsebool -P httpd_can_network_connect 1
 
-echo "==> Writing nginx config"
-cat > /etc/nginx/conf.d/kalshi-arb.conf <<NGINX
+if [ ! -f /etc/nginx/conf.d/kalshi-arb.conf ]; then
+    echo "==> Writing nginx config"
+    cat > /etc/nginx/conf.d/kalshi-arb.conf <<NGINX
 server {
     listen 80;
     server_name $DOMAIN;
@@ -66,8 +67,13 @@ server {
     }
 }
 NGINX
-
-nginx -t && systemctl enable --now nginx && systemctl reload nginx
+    nginx -t && systemctl enable --now nginx && systemctl reload nginx
+    echo "==> Setting up SSL"
+    certbot --nginx -d $DOMAIN --non-interactive --redirect
+else
+    echo "==> Nginx config already exists, skipping (certbot manages SSL)"
+    systemctl enable --now nginx && systemctl reload nginx
+fi
 
 echo "==> Writing systemd service"
 cat > /etc/systemd/system/kalshi-arb.service <<EOF
