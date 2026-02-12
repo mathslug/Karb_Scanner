@@ -137,6 +137,15 @@ def main() -> None:
                 f"cost=${r['total_cost']:>8.2f}"
             )
 
+    # Email notification for BUY signals
+    try:
+        from notify import send_buy_alert
+
+        if send_buy_alert(results):
+            print("  Email notification sent.")
+    except Exception as e:
+        log.warning("Failed to send email notification: %s", e)
+
     conn.close()
 
 
