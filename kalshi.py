@@ -1,10 +1,14 @@
 """Shared Kalshi API helpers, fee model, and orderbook utilities."""
 
+import logging
 import math
+import time
 from dataclasses import dataclass
 from typing import Literal
 
 import requests
+
+log = logging.getLogger(__name__)
 
 # ── Kalshi constants ─────────────────────────────────────────────────────────
 
@@ -45,7 +49,10 @@ class LegResult:
 
 def fetch_market(ticker: str) -> dict:
     """Fetch a single market from the Kalshi public API (no auth required)."""
+    t0 = time.monotonic()
     resp = requests.get(f"{KALSHI_BASE}/markets/{ticker}", timeout=10)
+    elapsed_ms = (time.monotonic() - t0) * 1000
+    log.debug("fetch_market %s -> %d (%.0fms)", ticker, resp.status_code, elapsed_ms)
     resp.raise_for_status()
     return resp.json()["market"]
 
@@ -62,7 +69,10 @@ def fetch_orderbook(ticker: str) -> dict:
       - YES bid at $P  =  NO ask at $(1-P)
       - NO bid at $P   =  YES ask at $(1-P)
     """
+    t0 = time.monotonic()
     resp = requests.get(f"{KALSHI_BASE}/markets/{ticker}/orderbook", timeout=10)
+    elapsed_ms = (time.monotonic() - t0) * 1000
+    log.debug("fetch_orderbook %s -> %d (%.0fms)", ticker, resp.status_code, elapsed_ms)
     resp.raise_for_status()
     data = resp.json()["orderbook"]
 

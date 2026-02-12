@@ -9,11 +9,14 @@ Usage:
 """
 
 import argparse
+import logging
 import sys
 import time
 
 import requests
 from dotenv import load_dotenv
+
+log = logging.getLogger("evaluate")
 
 import db as db_mod
 from main import evaluate_pair
@@ -33,7 +36,20 @@ def main() -> None:
         "--max-n", type=int, default=500,
         help="max contracts to search for optimal fill (default: 500)",
     )
+    parser.add_argument(
+        "--log-file", default="evaluate.log",
+        help="log file path (default: evaluate.log)",
+    )
     args = parser.parse_args()
+
+    # ── Logging setup ────────────────────────────────────────────────────
+    logging.basicConfig(
+        filename=args.log_file,
+        filemode="w",
+        level=logging.DEBUG,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     conn = db_mod.get_connection(args.db)
     pairs = db_mod.get_pairs_for_review(conn, "confirmed")
@@ -64,15 +80,21 @@ def main() -> None:
                 y = result.get("annualized_yield")
                 n = result.get("n_contracts", 0)
                 cost = result.get("total_cost", 0)
+                log.info("BUY pair_id=%s %s/%s yield=%.4f n=%d cost=%.2f",
+                         pair["id"], ant, con, y, n, cost)
                 print(f"{rec}  n={n}  yield={y*100:.2f}%  cost=${cost:.2f}")
             else:
                 y = result.get("annualized_yield")
                 y_str = f"{y*100:.2f}%" if y is not None else "N/A"
+                log.info("PASS pair_id=%s %s/%s yield=%s",
+                         pair["id"], ant, con, y_str)
                 print(f"PASS  yield={y_str}")
         except requests.HTTPError as e:
+            log.warning("API error pair_id=%s %s/%s: %s", pair["id"], ant, con, e)
             print(f"API error: {e}")
             continue
         except Exception as e:
+            log.warning("Error pair_id=%s %s/%s: %s", pair["id"], ant, con, e)
             print(f"error: {e}")
             continue
 

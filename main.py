@@ -18,12 +18,15 @@ Strategy:
 """
 
 import argparse
+import logging
 import sys
 from dataclasses import dataclass, field
 from datetime import date
 
 import requests
 from dotenv import load_dotenv
+
+log = logging.getLogger(__name__)
 
 from kalshi import (
     Side,
@@ -160,6 +163,7 @@ def fetch_pair_books(antecedent_ticker: str, consequent_ticker: str) -> dict:
 
     Strategy: buy NO on antecedent (walk YES bids), buy YES on consequent (walk NO bids).
     """
+    log.debug("fetch_pair_books: ant=%s con=%s", antecedent_ticker, consequent_ticker)
     ant_market = fetch_market(antecedent_ticker)
     con_market = fetch_market(consequent_ticker)
     ant_book = fetch_orderbook(antecedent_ticker)
@@ -219,6 +223,11 @@ def evaluate_pair(pair: dict, hurdle_yield: float, max_n: int = 500) -> dict:
     # Fetch orderbooks
     books = fetch_pair_books(ant_ticker, con_ticker)
 
+    if not books["ant_bids"]:
+        log.warning("Pair %s: empty antecedent orderbook (%s)", pair_id, ant_ticker)
+    if not books["con_bids"]:
+        log.warning("Pair %s: empty consequent orderbook (%s)", pair_id, con_ticker)
+
     def yield_at_n(n: int) -> float | None:
         leg_a = walk_book(books["ant_bids"], n)
         leg_b = walk_book(books["con_bids"], n)
@@ -236,6 +245,7 @@ def evaluate_pair(pair: dict, hurdle_yield: float, max_n: int = 500) -> dict:
 
     # Check yield at n=1
     y1 = yield_at_n(1)
+    log.debug("Pair %s: yield_at_n(1) = %s, hurdle = %.4f", pair_id, y1, hurdle_yield)
     if y1 is None or y1 < hurdle_yield:
         # Build a pass result with top-of-book info
         tob_cost = books["ant_tob_no_ask"] + books["con_tob_yes_ask"]
@@ -269,6 +279,8 @@ def evaluate_pair(pair: dict, hurdle_yield: float, max_n: int = 500) -> dict:
             lo = mid + 1
         else:
             hi = mid - 1
+
+    log.debug("Pair %s: binary search -> best_n=%d, max_fillable=%d", pair_id, best_n, max_fillable)
 
     # Final evaluation at optimal n
     leg_a = walk_book(books["ant_bids"], best_n)

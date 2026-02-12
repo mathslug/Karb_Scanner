@@ -14,7 +14,6 @@ import argparse
 import csv
 import json
 import logging
-import re
 import sys
 import time
 from itertools import combinations
@@ -110,6 +109,7 @@ def fetch_markets(
                 if attempt < 2 and ("429" in str(e) or "timed out" in str(e).lower() or "No route" in str(e)):
                     time.sleep(2 ** attempt)  # 1s, 2s backoff
                     continue
+                log.warning("Failed to fetch events for %s: %s", sticker, e)
                 print(f"  Warning: failed to fetch events for {sticker}: {e}")
                 events = []
                 break
@@ -202,12 +202,16 @@ IMPORTANT:
 Return a JSON object (no markdown fencing) with a "results" key containing an array with one object per pair:
 {"results": [
   {
+    "ticker_a": "Market A ticker (copied exactly from input)",
+    "ticker_b": "Market B ticker (copied exactly from input)",
     "antecedent_ticker": "..." or null,
     "consequent_ticker": "..." or null,
     "confidence": "high" | "medium" | "low" | "none",
     "reasoning": "short explanation"
   }
 ]}
+
+IMPORTANT: "ticker_a" and "ticker_b" MUST be copied exactly from the Market A and Market B tickers shown in each pair.
 
 "confidence" of "none" means no implication relationship exists — set antecedent_ticker and consequent_ticker to null.
 "antecedent_ticker" is the MORE SPECIFIC market (e.g., "wins French Open"), "consequent_ticker" is the BROADER market (e.g., "wins a Grand Slam").
@@ -234,23 +238,6 @@ def format_pair_for_llm(idx: int, a: dict, b: dict) -> str:
     )
 
 
-def _call_ollama(prompt: str, model: str) -> str:
-    """Call Ollama's OpenAI-compatible chat API."""
-    resp = requests.post(
-        "http://localhost:11434/api/chat",
-        json={
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-            "options": {"temperature": 0.2, "num_predict": 4096},
-            "format": "json",
-        },
-        timeout=600,
-    )
-    resp.raise_for_status()
-    return resp.json()["message"]["content"]
-
-
 def _call_anthropic(prompt: str, model: str) -> str:
     """Call Anthropic Messages API."""
     import anthropic
@@ -264,22 +251,18 @@ def _call_anthropic(prompt: str, model: str) -> str:
 
 
 def _extract_json(text: str) -> list[dict]:
-    """Extract a JSON array from LLM output, stripping think tags and markdown fencing."""
+    """Extract a JSON array from LLM output, stripping markdown fencing."""
     text = text.strip()
-    # Strip Qwen3 <think>...</think> reasoning block
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1]
         if text.endswith("```"):
             text = text[: text.rfind("```")]
         text = text.strip()
     parsed = json.loads(text)
-    # Ollama with format=json may wrap in an object
     if isinstance(parsed, dict):
-        for key in ("pairs", "results", "data"):
+        for key in ("results", "pairs", "data"):
             if isinstance(parsed.get(key), list):
                 return parsed[key]
-        # If it's a single result dict, wrap it
         if "antecedent_ticker" in parsed:
             return [parsed]
     return parsed
@@ -287,18 +270,15 @@ def _extract_json(text: str) -> list[dict]:
 
 def screen_pairs_with_llm(
     pairs: list[tuple[dict, dict]],
-    provider: str,
     model: str,
     batch_size: int = 12,
 ) -> list[dict]:
-    """Screen candidate pairs using an LLM for implication checking.
+    """Screen candidate pairs using Claude for implication checking.
 
-    Supports 'ollama' and 'anthropic' providers. Batches pairs and returns
-    ALL results (including confidence="none") so they can be stored in the DB
-    to avoid re-screening. Each result dict includes ticker_a/ticker_b from
-    the input pair.
+    Batches pairs and returns ALL results (including confidence="none") so
+    they can be stored in the DB to avoid re-screening. Each result dict
+    includes ticker_a/ticker_b from the input pair.
     """
-    call_fn = _call_ollama if provider == "ollama" else _call_anthropic
     results = []
     total_batches = (len(pairs) + batch_size - 1) // batch_size
 
@@ -312,31 +292,78 @@ def screen_pairs_with_llm(
             prompt += format_pair_for_llm(i, a, b)
 
         try:
-            text = call_fn(prompt, model)
+            text = _call_anthropic(prompt, model)
             log.debug("Batch %d raw response:\n%s", batch_num, text)
             batch_results = _extract_json(text)
-            for i, r in enumerate(batch_results):
-                # Attach input pair tickers so DB can store the canonical pair
-                if i < len(batch):
-                    r["ticker_a"] = batch[i][0]["ticker"]
-                    r["ticker_b"] = batch[i][1]["ticker"]
+
+            if len(batch_results) != len(batch):
+                log.warning("Batch %d: expected %d results, got %d",
+                            batch_num, len(batch), len(batch_results))
+
+            # Build lookup from input pairs for ticker-based matching
+            batch_lookup = {(a["ticker"], b["ticker"]): (a, b) for a, b in batch}
+            matched_keys: set[tuple[str, str]] = set()
+            accepted, rejected, unmatched_count = 0, 0, 0
+
+            for r in batch_results:
+                ra = r.get("ticker_a", "")
+                rb = r.get("ticker_b", "")
+
+                # Try direct match, then reversed order
+                key = None
+                if (ra, rb) in batch_lookup:
+                    key = (ra, rb)
+                elif (rb, ra) in batch_lookup:
+                    key = (rb, ra)
+                else:
+                    # Fallback for non-"none" results: match via antecedent/consequent tickers
+                    ant = r.get("antecedent_ticker")
+                    con = r.get("consequent_ticker")
+                    if ant and con:
+                        result_tickers = {ant, con}
+                        for bk in batch_lookup:
+                            if bk not in matched_keys and {bk[0], bk[1]} == result_tickers:
+                                key = bk
+                                break
+
+                if key is None:
+                    log.warning("Batch %d: unmatched LLM result ticker_a=%s ticker_b=%s ant=%s con=%s",
+                                batch_num, ra, rb,
+                                r.get("antecedent_ticker"), r.get("consequent_ticker"))
+                    unmatched_count += 1
+                    continue
+
+                matched_keys.add(key)
+                # Set canonical input pair tickers
+                r["ticker_a"] = key[0]
+                r["ticker_b"] = key[1]
 
                 if r.get("confidence") != "none" and r.get("antecedent_ticker") and r.get("consequent_ticker"):
                     log.info("ACCEPTED: %s -> %s [%s] %s",
                              r.get("antecedent_ticker"), r.get("consequent_ticker"),
                              r.get("confidence"), r.get("reasoning", ""))
+                    accepted += 1
                 else:
                     log.info("REJECTED: %s -> %s [%s] %s",
                              r.get("antecedent_ticker"), r.get("consequent_ticker"),
                              r.get("confidence"), r.get("reasoning", ""))
+                    rejected += 1
                 results.append(r)
+
+            # Warn about input pairs with no LLM result
+            unresulted = set(batch_lookup.keys()) - matched_keys
+            for uk in unresulted:
+                log.warning("Batch %d: no LLM result for input pair %s / %s",
+                            batch_num, uk[0], uk[1])
+
+            log.info("Batch %d summary: %d accepted, %d rejected, %d unmatched, %d missing",
+                     batch_num, accepted, rejected, unmatched_count, len(unresulted))
         except (json.JSONDecodeError, requests.RequestException, KeyError) as e:
             log.warning("Batch %d failed: %s", batch_num, e)
             print(f"    Warning: batch {batch_num} failed: {e}")
             continue
 
-        if provider == "anthropic":
-            time.sleep(0.5)
+        time.sleep(0.5)
 
     return results
 
@@ -488,16 +515,12 @@ def main() -> None:
     )
     # LLM options
     parser.add_argument(
-        "--provider", default="ollama", choices=["ollama", "anthropic"],
-        help="LLM provider (default: ollama)",
+        "--model", default="claude-haiku-4-5-20251001",
+        help="Anthropic model name (default: claude-haiku-4-5-20251001)",
     )
     parser.add_argument(
-        "--model", default=None,
-        help="model name (default: qwen3-coder:30b for ollama, claude-haiku-4-5-20251001 for anthropic)",
-    )
-    parser.add_argument(
-        "--batch-size", type=int, default=None,
-        help="pairs per LLM batch (default: 12 for anthropic, 1 for ollama)",
+        "--batch-size", type=int, default=12,
+        help="pairs per LLM batch (default: 12)",
     )
     # Output options
     parser.add_argument(
@@ -568,13 +591,10 @@ def main() -> None:
         pairs = pairs[:args.max_pairs]
 
     # ── LLM screening ────────────────────────────────────────────────────
-    model = args.model or (
-        "qwen3-coder:30b" if args.provider == "ollama"
-        else "claude-haiku-4-5-20251001"
-    )
-    batch_size = args.batch_size or (12 if args.provider == "anthropic" else 1)
-    print(f"\nScreening {len(pairs)} pairs with {args.provider}/{model} (batch_size={batch_size})...")
-    all_results = screen_pairs_with_llm(pairs, args.provider, model, batch_size)
+    model = args.model
+    batch_size = args.batch_size
+    print(f"\nScreening {len(pairs)} pairs with {model} (batch_size={batch_size})...")
+    all_results = screen_pairs_with_llm(pairs, model, batch_size)
 
     # ── Store all results in DB ──────────────────────────────────────────
     stored = db_mod.bulk_upsert_pair_results(conn, all_results, model)
