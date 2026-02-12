@@ -11,3 +11,13 @@ wheels/
 
 # Environment / secrets
 .env
+
+# Databases
+*.db
+
+# Data files
+*.json
+*.csv
+
+# Logs
+*.log
