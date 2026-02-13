@@ -7,7 +7,7 @@ from flask import Flask, redirect, render_template, request, url_for
 
 import db as db_mod
 
-DB_PATH = os.environ.get("SLONK_DB", "slonk_arb.db")
+DB_PATH = os.environ.get("SLONK_DB") or os.environ.get("KALSHI_DB", "slonk_arb.db")
 
 
 def create_app(db_path: str = DB_PATH) -> Flask:
