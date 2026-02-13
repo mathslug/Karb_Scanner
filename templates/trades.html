@@ -50,10 +50,10 @@
       <td style="text-align:right">${{ "%.4f"|format(e.cost_per_pair) }}</td>
       <td style="text-align:right">${{ "%.2f"|format(e.total_cost) }}</td>
       <td style="text-align:right">
-        {% if e.annualized_yield is not none %}{{ "%.2f"|format(e.annualized_yield * 100) }}%{% else %}N/A{% endif %}
+        {% if e.annualized_yield is not none %}{% if e.annualized_yield > 9.99 %}&gt;999%{% else %}{{ "%.2f"|format(e.annualized_yield * 100) }}%{% endif %}{% else %}N/A{% endif %}
       </td>
       <td style="text-align:right;font-weight:bold;color:{{ 'green' if e.excess_yield is not none and e.excess_yield > 0 else 'red' }}">
-        {% if e.excess_yield is not none %}{{ "%+.2f"|format(e.excess_yield * 100) }}%{% else %}N/A{% endif %}
+        {% if e.excess_yield is not none %}{% if e.excess_yield > 9.99 %}&gt;999%{% elif e.excess_yield < -9.99 %}&lt;-999%{% else %}{{ "%+.2f"|format(e.excess_yield * 100) }}%{% endif %}{% else %}N/A{% endif %}
       </td>
       <td style="text-align:right">{{ e.max_fillable }}</td>
       <td><small>{{ e.evaluated_at[:16] if e.evaluated_at else 'N/A' }}</small></td>
