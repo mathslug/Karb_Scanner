@@ -212,8 +212,9 @@ Deployed to a single Digital Ocean droplet (Debian 12) at `mathslug.me`.
 
 | Time ET | UTC | Job |
 |---------|-----|-----|
+| 5:30 AM | 09:30 | `scan.py --category Sports --max-pairs 0` -- fetch all sports tickers into DB (no LLM) |
 | 6:00 AM | 10:00 | `fetch_yields.py` -- Treasury yield curve |
-| 6:30 AM | 10:30 | `scan.py` && `evaluate.py` && `evaluate.py --mode high` (chained) |
+| 6:30 AM | 10:30 | `scan.py --from-db --min-volume 200` && `evaluate.py` && `evaluate.py --mode high` (chained) |
 | Sun 3 AM | Sun 7:00 | DB backup to `/var/lib/kalshi-arb/backups/` |
 
 ### Email notifications
@@ -233,3 +234,4 @@ NOTIFY_EMAIL=...
 
 - `DROPLET_URL` -- server hostname (e.g. slonkn.mathslug.com)
 - `SSH_PRIVATE_KEY` -- deploy user's private key
+- `ANTHROPIC_KEY` -- Anthropic API key (used to create `.env` on fresh deploys)
