@@ -4,15 +4,15 @@ Kalshi cross-market arbitrage checker and scanner for binary prediction markets.
 
 ## Architecture
 
-Seven code files + templates + deploy scripts:
+Eight code files + templates + deploy scripts:
 
 - **`kalshi.py`** -- shared Kalshi API helpers, fee model, and orderbook utilities. Contains `KALSHI_BASE`, `TAKER_FEE_COEFF`, `fetch_market()`, `fetch_orderbook()`, `taker_fee()`, `walk_book()`, and the `Fill`, `LegResult`, `Side` types.
 
 - **`main.py`** -- evaluates a known arb pair. Has `evaluate_arb(ticker_a, side_a, ticker_b, side_b, n, settlement_date, discount_rate)` which walks both orderbooks, computes all-in cost with fees, and returns an `ArbResult` (key field: `npv`). CLI wrapper hardcodes the Musetti FO/GS tennis tickers.
 
-- **`scan.py`** -- discovers arb pairs automatically. Fetches sports markets from Kalshi, groups by entity (`yes_sub_title`), generates cross-series candidate pairs, screens via Claude Haiku for logical implication, persists to SQLite DB, prints terminal summary.
+- **`scan.py`** -- discovers arb pairs automatically. Fetches sports markets from Kalshi, groups by entity (`yes_sub_title`), generates cross-series candidate pairs, screens via Claude Sonnet for logical implication, persists to SQLite DB, prints terminal summary.
 
-- **`db.py`** -- pure SQLite persistence functions. Every function takes `conn` as first arg — no global state. Tables: `tickers`, `prices`, and `candidate_pairs`. Designed for REPL use: `import db; conn = db.get_connection("slonk_arb.db")`.
+- **`db.py`** -- pure SQLite persistence functions. Every function takes `conn` as first arg — no global state. Tables: `tickers`, `prices`, `candidate_pairs`, `trade_evaluations`, `treasury_yields`, `trade_signals`, `settings`. Designed for REPL use: `import db; conn = db.get_connection("slonk_arb.db")`.
 
 - **`evaluate.py`** -- evaluates confirmed arb pairs against live orderbooks. Fetches orderbooks, finds optimal contract count via binary search, stores results in DB.
 
@@ -22,9 +22,11 @@ Seven code files + templates + deploy scripts:
 
 - **`notify.py`** -- sends email notifications for BUY recommendations via Mailgun HTTP API. Called by `evaluate.py`.
 
-- **`templates/`** -- Jinja2 templates (`base.html`, `review.html`, `detail.html`) using Pico CSS.
+- **`templates/`** -- Jinja2 templates (`base.html`, `review.html`, `detail.html`, `trades.html`, `signals.html`, `settings.html`) using Pico CSS.
 
 - **`deploy/`** -- server provisioning (`setup.sh`), cron wrapper (`run.sh`), and GitHub Actions workflow.
+
+- **`scripts/`** -- helper scripts for operations (`pull_prod.sh`, `db_summary.py`, `check_server.sh`, `log_errors.sh`, `pair_details.py`).
 
 ## Running
 
@@ -65,11 +67,6 @@ uv run app.py                                       # http://localhost:5001
 SLONK_DB=my.db uv run app.py                       # custom DB path
 ```
 
-### Refresh prod DB locally
-```
-scp almalinux@slonkn.mathslug.com:/var/lib/kalshi-arb/kalshi_arb.db kalshi_arb_prod.db
-```
-
 ### Import from legacy JSON cache
 ```
 uv run python -c "import db; conn = db.get_connection(); db.import_from_cache(conn, 'sports_cache.json', 'scan_results.json')"
@@ -82,7 +79,7 @@ uv run python -c "import db; conn = db.get_connection(); db.import_from_cache(co
 
 ### CLI args -- scan.py
 - `--filter` / `-f` -- comma-separated keywords to filter series (e.g. "tennis,atp,grand slam")
-- `--model` -- Anthropic model name (default: `claude-haiku-4-5-20251001`)
+- `--model` -- Anthropic model name (default: `claude-sonnet-4-6`)
 - `--min-volume` -- exclude markets below this volume (default: 0)
 - `--batch-size` -- pairs per LLM call (default: 12)
 - `--category` -- Kalshi category (default: Sports)
@@ -101,14 +98,15 @@ uv run python -c "import db; conn = db.get_connection(); db.import_from_cache(co
 ## Scanner data flow
 
 ```
-Fetch filtered series -> Fetch events + nested markets per series
+Fetch ALL series for category -> Fetch events + nested markets per series
   -> Extract minimal market representations
-  -> Upsert tickers into SQLite DB
+  -> Upsert tickers into SQLite DB + deactivate missing tickers
   -> Group markets by entity (yes_sub_title) from DB
+  -> Apply keyword filter + min-volume at entity/pair level
   -> Generate cross-series candidate pairs per entity
   -> Filter out already-screened pairs (unless --rescan)
   -> LLM screens each pair for logical implication (A YES -> B YES?)
-  -> Store ALL results in DB (including "none" confidence)
+  -> Store ALL results in DB (including "none" and "need_more_info" confidence)
   -> Print terminal summary
 ```
 
@@ -118,15 +116,18 @@ Implication relationships almost always involve the same entity: "Alcaraz wins F
 
 ### LLM screening
 
-Uses Claude Haiku via the Anthropic API (~$0.03/scan). The prompt requests `ticker_a`/`ticker_b` echo-back fields so results are matched to input pairs by ticker rather than array index — prevents silent data corruption if the LLM skips, reorders, or merges results.
+Uses Claude Sonnet via the Anthropic API. The prompt requests `ticker_a`/`ticker_b` echo-back fields so results are matched to input pairs by ticker rather than array index — prevents silent data corruption if the LLM skips, reorders, or merges results.
 
 ## Database
 
-SQLite database (`slonk_arb.db` by default) with three tables:
+SQLite database (`slonk_arb.db` by default) with six tables:
 
 - **`tickers`** -- all market info fetched from Kalshi (ticker, series, event, title, prices, volume, timestamps). Primary key: `ticker`. Price columns are the "latest" cache, overwritten each scan.
 - **`prices`** -- append-only price history. One row per ticker per scan with `last_price`, `yes_ask`, `no_ask`, and `recorded_at` timestamp. Populated by `record_prices()` during each scan.
-- **`candidate_pairs`** -- LLM screening results with `ticker_a`/`ticker_b` (always stored in sorted order), `antecedent_ticker`/`consequent_ticker`, confidence, reasoning, and `human_review` (confirmed/rejected/NULL).
+- **`candidate_pairs`** -- LLM screening results with `ticker_a`/`ticker_b` (always stored in sorted order), `antecedent_ticker`/`consequent_ticker`, confidence (`high`/`medium`/`low`/`need_more_info`/`none`), reasoning, and `human_review` (confirmed/rejected/NULL).
+- **`trade_evaluations`** -- append-only evaluation results per pair (orderbook snapshots, yields, costs, recommendation).
+- **`treasury_yields`** -- daily Treasury CMT yield curve data for discount rate calculations.
+- **`trade_signals`** -- latest evaluation state per pair, upserted each evaluation run (tracks first seen, refresh count, last recommendation).
 
 ### `db.py` key functions
 
@@ -139,9 +140,11 @@ All take `conn: sqlite3.Connection` as first arg:
 - `get_tickers_by_entity(conn)` -- group active tickers by entity (2+ series)
 - `get_screened_pair_keys(conn)` -- set of already-evaluated pair keys
 - `bulk_upsert_pair_results(conn, results, model)` -- store LLM results
-- `get_pairs_for_review(conn, status)` -- fetch pairs for review UI
+- `deactivate_missing_tickers(conn, active_tickers)` -- mark disappeared tickers inactive
+- `get_pairs_for_review(conn, status)` -- fetch pairs for review UI (`unreviewed`/`confirmed`/`rejected`/`need_more_info`)
 - `get_pair_detail(conn, pair_id)` -- full info for a single pair
 - `set_review(conn, pair_id, decision)` -- set human review
+- `upsert_trade_signal(conn, eval_dict)` -- insert/update trade signal from evaluation
 - `import_from_cache(conn, cache_path, results_path)` -- bootstrap from JSON
 
 ## Review webapp
@@ -151,9 +154,13 @@ Flask app (`app.py`) on port 5001 with routes:
 | Route | Purpose |
 |-------|---------|
 | `/` | Dashboard with pair counts |
-| `/review` | Unreviewed pairs table |
+| `/review` | Unreviewed pairs table (filterable by confidence) |
 | `/reviewed` | Confirmed + rejected pairs |
 | `/pair/<id>` | Pair detail with confirm/reject buttons |
+| `/trades` | Trade evaluations history |
+| `/signals` | Latest trade signals per pair |
+| `/settings` | App settings |
+| `/login` | Authentication |
 | `POST /pair/<id>/review` | Submit review decision |
 
 Uses Pico CSS (CDN, classless). Kalshi links: `https://kalshi.com/markets/<event_ticker>`.
@@ -192,14 +199,14 @@ Uses the Kalshi public REST API at `https://api.elections.kalshi.com/trade-api/v
 
 ## Deployment
 
-Deployed to a single Digital Ocean droplet (Debian 12) at `mathslug.me`.
+Deployed to a single Digital Ocean droplet (AlmaLinux) at `slonkn.mathslug.com`.
 
 ### Server layout
 
 ```
-/opt/slonk-arb/              # Code (git clone, deployed via GitHub Actions)
-/var/lib/slonk-arb/          # Persistent data (DB, .env, backups/)
-/var/log/slonk-arb/          # Log files (scan.log, evaluate.log, cron.log)
+/opt/kalshi-arb/              # Code (git clone, deployed via GitHub Actions)
+/var/lib/kalshi-arb/          # Persistent data (DB, .env, backups/)
+/var/log/kalshi-arb/          # Log files (scan.log, evaluate.log, cron.log)
 ```
 
 ### Stack
@@ -221,8 +228,9 @@ Deployed to a single Digital Ocean droplet (Debian 12) at `mathslug.me`.
 |---------|-----|-----|
 | 5:30 AM | 09:30 | `scan.py --category Sports --max-pairs 0` -- fetch all sports tickers into DB (no LLM) |
 | 6:00 AM | 10:00 | `fetch_yields.py` -- Treasury yield curve |
-| 6:30 AM | 10:30 | `scan.py --from-db --min-volume 200` && `evaluate.py` && `evaluate.py --mode high` (chained) |
-| Sun 3 AM | Sun 7:00 | DB backup to `/var/lib/slonk-arb/backups/` |
+| 6:30 AM | 10:30 | `scan.py --from-db --filter tennis --min-volume 200` && `evaluate.py` && `evaluate.py --mode high` (chained) |
+| 2:00 PM | 18:00 | `evaluate.py` -- afternoon orderbook refresh |
+| Sun 3 AM | Sun 7:00 | DB backup to `/var/lib/kalshi-arb/backups/` |
 
 ### Email notifications
 
