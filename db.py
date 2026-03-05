@@ -530,7 +530,7 @@ def compute_hurdle_yield(conn: sqlite3.Connection, days: int | None) -> float | 
 def get_pairs_for_review(conn: sqlite3.Connection, status: str) -> list[dict]:
     """Fetch pairs for review UI.
 
-    status: "unreviewed" | "confirmed" | "rejected"
+    status: "unreviewed" | "confirmed" | "rejected" | "need_more_info" | "high_unreviewed"
     Returns list of dicts with pair + joined ticker info + computed arb_cost,
     sorted by cost ascending then confidence descending.
     """
@@ -759,40 +759,6 @@ def insert_trade_evaluation(conn: sqlite3.Connection, eval_dict: dict) -> int:
     return cur.lastrowid
 
 
-def bulk_insert_evaluations(conn: sqlite3.Connection, evals: list[dict]) -> int:
-    """Insert a batch of trade evaluations. Returns count inserted."""
-    count = 0
-    now = _now_utc()
-    for e in evals:
-        conn.execute(
-            """INSERT INTO trade_evaluations
-                (pair_id, evaluated_at, recommendation, n_contracts,
-                 cost_per_pair, total_cost, ant_leg_cost, ant_leg_fees,
-                 con_leg_cost, con_leg_fees, annualized_yield, hurdle_yield,
-                 excess_yield, days_to_maturity, max_fillable,
-                 tob_ant_no_ask, tob_con_yes_ask, tob_cost,
-                 ant_fills_json, con_fills_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                e["pair_id"], now, e["recommendation"],
-                e.get("n_contracts", 0),
-                e.get("cost_per_pair"), e.get("total_cost"),
-                e.get("ant_leg_cost"), e.get("ant_leg_fees"),
-                e.get("con_leg_cost"), e.get("con_leg_fees"),
-                e.get("annualized_yield"), e.get("hurdle_yield"),
-                e.get("excess_yield"), e.get("days_to_maturity"),
-                e.get("max_fillable"),
-                e.get("tob_ant_no_ask"), e.get("tob_con_yes_ask"),
-                e.get("tob_cost"),
-                json.dumps(e.get("ant_fills")) if e.get("ant_fills") else None,
-                json.dumps(e.get("con_fills")) if e.get("con_fills") else None,
-            ),
-        )
-        count += 1
-    conn.commit()
-    return count
-
-
 def upsert_trade_signal(conn: sqlite3.Connection, eval_dict: dict) -> None:
     """Insert or update a trade signal from an evaluation result."""
     now = _now_utc()
@@ -864,33 +830,3 @@ def get_latest_evaluations(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_evaluation_detail(conn: sqlite3.Connection, eval_id: int) -> dict | None:
-    """Single evaluation with full pair/ticker info."""
-    row = conn.execute(
-        """SELECT te.*, cp.antecedent_ticker, cp.consequent_ticker,
-                  cp.confidence, cp.reasoning, cp.human_review,
-                  ant.title AS antecedent_title,
-                  ant.event_ticker AS antecedent_event_ticker,
-                  ant.series_ticker AS antecedent_series,
-                  ant.yes_sub_title AS antecedent_entity,
-                  ant.volume AS antecedent_volume,
-                  con.title AS consequent_title,
-                  con.event_ticker AS consequent_event_ticker,
-                  con.series_ticker AS consequent_series,
-                  con.yes_sub_title AS consequent_entity,
-                  con.volume AS consequent_volume
-           FROM trade_evaluations te
-           INNER JOIN candidate_pairs cp ON cp.id = te.pair_id
-           LEFT JOIN tickers ant ON ant.ticker = cp.antecedent_ticker
-           LEFT JOIN tickers con ON con.ticker = cp.consequent_ticker
-           WHERE te.id = ?""",
-        (eval_id,),
-    ).fetchone()
-    if not row:
-        return None
-    d = dict(row)
-    if d.get("ant_fills_json"):
-        d["ant_fills"] = json.loads(d["ant_fills_json"])
-    if d.get("con_fills_json"):
-        d["con_fills"] = json.loads(d["con_fills_json"])
-    return d

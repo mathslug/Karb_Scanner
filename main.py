@@ -24,7 +24,6 @@ from dataclasses import dataclass, field
 from datetime import date
 
 import requests
-from dotenv import load_dotenv
 
 log = logging.getLogger(__name__)
 
@@ -37,8 +36,6 @@ from kalshi import (
     taker_fee,
     walk_book,
 )
-
-load_dotenv()
 
 
 # ── Data types ───────────────────────────────────────────────────────────────

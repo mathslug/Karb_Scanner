@@ -505,6 +505,7 @@ def screen_pairs_with_llm(
         for i, (a, b) in enumerate(batch, 1):
             prompt += format_pair_for_llm(i, a, b)
 
+        results_start = len(results)
         try:
             text = _call_anthropic(prompt, model)
             log.debug("Batch %d raw response:\n%s", batch_num, text)
@@ -581,7 +582,7 @@ def screen_pairs_with_llm(
 
             # Write this batch's results to DB immediately
             if conn is not None:
-                batch_stored = results[-accepted - rejected:]  # last N appended
+                batch_stored = results[results_start:]
                 db_mod.bulk_upsert_pair_results(conn, batch_stored, model)
         except (json.JSONDecodeError, requests.RequestException, KeyError) as e:
             log.warning("Batch %d failed: %s", batch_num, e)
