@@ -43,6 +43,11 @@ def create_app(db_path: str = DB_PATH) -> Flask:
     def inject_is_admin():
         return {"is_admin": _check_auth()}
 
+    @app.route("/login")
+    @admin_required
+    def login():
+        return redirect(request.args.get("next", url_for("index")))
+
     @app.route("/")
     def index():
         conn = get_conn()

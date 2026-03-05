@@ -108,6 +108,8 @@
       <strong>Decision:</strong> {{ pair.human_review }}<br>
       <strong>Reviewed at:</strong> {{ pair.reviewed_at }}
     </p>
+  {% else %}
+    <p>Not yet reviewed.</p>
   {% endif %}
 
   {% if is_admin %}
@@ -118,6 +120,8 @@
       <button type="submit" name="decision" value="rejected" class="secondary">Reject</button>
     </div>
   </form>
+  {% else %}
+  <a href="/login?next=/pair/{{ pair.id }}" role="button" class="outline">Authenticate</a>
   {% endif %}
 </article>
 
