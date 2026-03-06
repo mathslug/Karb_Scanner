@@ -103,7 +103,7 @@ echo "==> Setting up deploy user"
 id -u deploy &>/dev/null || useradd -m deploy
 usermod -aG slonk deploy
 cat > /etc/sudoers.d/deploy <<'SUDOERS'
-deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart slonk-arb, /usr/bin/systemctl reload nginx, /usr/bin/tee /var/lib/slonk-arb/.env, /usr/bin/tee -a /var/lib/slonk-arb/.env, /usr/bin/chown slonk\:slonk /var/lib/slonk-arb/.env, /usr/bin/chmod 600 /var/lib/slonk-arb/.env, /usr/bin/grep * /var/lib/slonk-arb/.env, /usr/bin/sed -i * /etc/nginx/conf.d/slonk-arb.conf
+deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart slonk-arb, /usr/bin/systemctl reload nginx, /usr/bin/tee /var/lib/slonk-arb/.env, /usr/bin/tee -a /var/lib/slonk-arb/.env, /usr/bin/chown slonk\:slonk /var/lib/slonk-arb/.env, /usr/bin/chmod 600 /var/lib/slonk-arb/.env, /usr/bin/grep * /var/lib/slonk-arb/.env, /usr/bin/sed -i * /etc/nginx/conf.d/slonk-arb.conf, /usr/bin/cp /opt/slonk-arb/deploy/slonk-arb.cron /etc/cron.d/slonk-arb
 SUDOERS
 chmod 440 /etc/sudoers.d/deploy
 chown -R deploy:slonk "$APP_DIR"
@@ -113,30 +113,8 @@ chown -R $APP_USER:$APP_USER "$APP_DIR/.venv"
 echo "==> Enabling crond"
 systemctl enable --now crond
 
-echo "==> Writing cron jobs"
-cat > /etc/cron.d/slonk-arb <<CRON
-# Kalshi Arb scheduled jobs (times in UTC)
-SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
-
-# Fetch Treasury yields daily at 6:00 AM ET (10:00 UTC)
-0 10 * * * $APP_USER $APP_DIR/deploy/run.sh fetch_yields.py --db $DATA_DIR/slonk_arb.db >> $LOG_DIR/cron.log 2>&1
-
-# Fetch all sports tickers into DB (no LLM calls)
-# 5:30 AM ET (09:30 UTC)
-30 9 * * * $APP_USER $APP_DIR/deploy/run.sh scan.py --category Sports --max-pairs 0 --db $DATA_DIR/slonk_arb.db --log-file $LOG_DIR/scan.log >> $LOG_DIR/cron.log 2>&1
-
-# Scan then evaluate (chained so they don't overlap)
-# 6:30 AM ET (10:30 UTC): scan -> evaluate confirmed -> evaluate high
-30 10 * * * $APP_USER $APP_DIR/deploy/run.sh scan.py --from-db --filter tennis --min-volume 200 --db $DATA_DIR/slonk_arb.db --log-file $LOG_DIR/scan.log >> $LOG_DIR/cron.log 2>&1 && $APP_DIR/deploy/run.sh evaluate.py --db $DATA_DIR/slonk_arb.db --log-file $LOG_DIR/evaluate.log >> $LOG_DIR/cron.log 2>&1 && $APP_DIR/deploy/run.sh evaluate.py --mode high --db $DATA_DIR/slonk_arb.db --log-file $LOG_DIR/evaluate-high.log >> $LOG_DIR/cron.log 2>&1
-
-# Afternoon orderbook refresh (2:00 PM ET / 18:00 UTC)
-0 18 * * * $APP_USER $APP_DIR/deploy/run.sh evaluate.py --db $DATA_DIR/slonk_arb.db --log-file $LOG_DIR/evaluate-afternoon.log >> $LOG_DIR/cron.log 2>&1
-
-# Backup DB weekly (Sunday 3:00 AM ET / 7:00 UTC)
-0 7 * * 0 $APP_USER cp $DATA_DIR/slonk_arb.db $DATA_DIR/backups/slonk_arb_\$(date +\%Y\%m\%d).db 2>&1
-CRON
-
+echo "==> Installing cron jobs"
+cp "$APP_DIR/deploy/slonk-arb.cron" /etc/cron.d/slonk-arb
 chmod 644 /etc/cron.d/slonk-arb
 
 echo "==> Setup complete!"
