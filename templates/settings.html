@@ -19,6 +19,8 @@
 
     <button type="submit">Save</button>
   </form>
+  {% else %}
+  <p><a href="/login?next=/settings" role="button" class="outline">Log in to edit</a></p>
   {% endif %}
   <p><small>Hurdle yield = max(treasury_rate + buffer, borrow_rate)</small></p>
 </article>
