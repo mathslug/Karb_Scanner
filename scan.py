@@ -693,7 +693,7 @@ def main() -> None:
     # ── Logging setup ─────────────────────────────────────────────────────
     logging.basicConfig(
         filename=args.log_file,
-        filemode="w",
+        filemode="a",
         level=logging.DEBUG,
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",

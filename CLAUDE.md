@@ -176,7 +176,7 @@ Uses Pico CSS (CDN, classless). Kalshi links: `https://kalshi.com/markets/<event
 
 When `main.py` is imported by `evaluate.py`, its log calls flow through evaluate's `basicConfig`. When run standalone as CLI, log calls are no-ops.
 
-Both `scan.py` and `evaluate.py` open log files with `filemode="w"` (overwrite). The 10:30 scan overwrites the 09:30 fetch's `scan.log`, but the fetch run does minimal logging (no LLM calls). All `print()` output is preserved in `cron.log` via `>>` append redirect.
+Both `scan.py` and `evaluate.py` open log files with `filemode="a"` (append). All `print()` output is also preserved in `cron.log` via `>>` append redirect.
 
 ## Key types
 
