@@ -6,4 +6,5 @@ cd /opt/slonk-arb
 set -a; source /var/lib/slonk-arb/.env; set +a
 export SLONK_DB=/var/lib/slonk-arb/slonk_arb.db
 export UV_PYTHON_INSTALL_DIR=/opt/uv-python
+export PYTHONUNBUFFERED=1
 exec /usr/local/bin/uv run "$@"

@@ -49,13 +49,10 @@ def main() -> None:
     args = parser.parse_args()
 
     # ── Logging setup ────────────────────────────────────────────────────
-    logging.basicConfig(
-        filename=args.log_file,
-        filemode="a",
-        level=logging.DEBUG,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    handler = logging.FileHandler(args.log_file, mode="a")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s", datefmt="%H:%M:%S"))
+    logging.basicConfig(level=logging.DEBUG, handlers=[handler])
+    logging.getLogger().info("=== evaluate.py started: %s ===", " ".join(sys.argv[1:]))
 
     conn = db_mod.get_connection(args.db)
     db_status = "confirmed" if args.mode == "confirmed" else "high_unreviewed"

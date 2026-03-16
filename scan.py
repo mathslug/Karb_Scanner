@@ -90,7 +90,7 @@ def fetch_markets(category: str) -> list[dict]:
     deactivation tracking. Filtering by keyword/volume is applied later
     at the LLM screening stage.
     """
-    print(f"Fetching {category} series...")
+    print(f"Fetching {category} series...", flush=True)
     all_series = fetch_series(category, None)
     print(f"  {len(all_series)} series")
 
@@ -114,7 +114,7 @@ def fetch_markets(category: str) -> list[dict]:
             for m in event.get("markets", []):
                 if m.get("status") not in ("open", "active"):
                     continue
-                vol = int(m.get("volume", 0) or 0)
+                vol = int(float(m.get("volume") or m.get("volume_fp") or 0))
                 markets.append({
                     "ticker": m["ticker"],
                     "series_ticker": sticker,
@@ -130,7 +130,7 @@ def fetch_markets(category: str) -> list[dict]:
                     "volume": vol,
                 })
         if (i + 1) % 10 == 0 or i + 1 == len(all_series):
-            print(f"  Processed {i + 1}/{len(all_series)} series ({len(markets)} markets)")
+            print(f"  Processed {i + 1}/{len(all_series)} series ({len(markets)} markets)", flush=True)
 
     print(f"  Total open markets: {len(markets)}")
     return markets
@@ -499,7 +499,7 @@ def screen_pairs_with_llm(
     for batch_idx in range(0, len(pairs), batch_size):
         batch = pairs[batch_idx : batch_idx + batch_size]
         batch_num = batch_idx // batch_size + 1
-        print(f"  LLM batch {batch_num}/{total_batches} ({len(batch)} pairs)...")
+        print(f"  LLM batch {batch_num}/{total_batches} ({len(batch)} pairs)...", flush=True)
 
         prompt = SCREENING_PROMPT
         for i, (a, b) in enumerate(batch, 1):
@@ -691,19 +691,17 @@ def main() -> None:
     args = parser.parse_args()
 
     # ── Logging setup ─────────────────────────────────────────────────────
-    logging.basicConfig(
-        filename=args.log_file,
-        filemode="a",
-        level=logging.DEBUG,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    handler = logging.FileHandler(args.log_file, mode="a")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S"))
+    logging.basicConfig(level=logging.DEBUG, handlers=[handler])
+    log.info("=== scan.py started: %s ===", " ".join(sys.argv[1:]))
 
     # ── Database setup ────────────────────────────────────────────────────
     conn = db_mod.get_connection(args.db)
 
     # ── Fetch or use DB ──────────────────────────────────────────────────
     if not args.from_db:
+        t0 = time.time()
         markets = fetch_markets(args.category)
         if not markets:
             print("No open markets found.")
@@ -714,6 +712,7 @@ def main() -> None:
         active_tickers = {m["ticker"] for m in markets}
         deactivated = db_mod.deactivate_missing_tickers(conn, active_tickers)
         print(f"  DB: {new} new tickers, {updated} updated, {recorded} price snapshots, {deactivated} deactivated")
+        print(f"  Fetch completed in {time.time() - t0:.0f}s", flush=True)
 
     # ── Generate candidates from DB ──────────────────────────────────────
     print("\nGrouping markets by entity (from DB)...")
@@ -769,9 +768,11 @@ def main() -> None:
     # ── LLM screening ────────────────────────────────────────────────────
     model = args.model
     batch_size = args.batch_size
-    print(f"\nScreening {len(pairs)} pairs with {model} (batch_size={batch_size})...")
+    print(f"\nScreening {len(pairs)} pairs with {model} (batch_size={batch_size})...", flush=True)
+    t0 = time.time()
     all_results = screen_pairs_with_llm(pairs, model, batch_size, conn=conn)
     print(f"  DB: {len(all_results)} pair results stored (incremental)")
+    print(f"  LLM screening completed in {time.time() - t0:.0f}s", flush=True)
 
     # ── Filter to confirmed for output ───────────────────────────────────
     confirmed = [r for r in all_results if r.get("confidence") not in ("none", "need_more_info") and r.get("antecedent_ticker") and r.get("consequent_ticker")]

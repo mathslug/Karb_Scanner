@@ -24,7 +24,7 @@ jobs:
             sudo cp /opt/slonk-arb/deploy/slonk-arb.cron /etc/cron.d/slonk-arb
             # Create .env from GitHub secrets if missing
             if [ ! -f /var/lib/slonk-arb/.env ]; then
-                printf 'ANTHROPIC_API_KEY=%s\nSLONK_ADMIN_PASSWORDWORD=%s\n' \
+                printf 'ANTHROPIC_API_KEY=%s\nSLONK_ADMIN_PASSWORD=%s\n' \
                     "$ANTHROPIC_KEY" "$SLONK_ADMIN_PASSWORD" | sudo tee /var/lib/slonk-arb/.env > /dev/null
                 sudo chown slonk:slonk /var/lib/slonk-arb/.env
                 sudo chmod 600 /var/lib/slonk-arb/.env
