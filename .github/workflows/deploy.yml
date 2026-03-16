@@ -17,23 +17,17 @@ jobs:
           envs: ANTHROPIC_KEY
           script: |
             set -e
-            # Support both old (kalshi-arb) and new (slonk-arb) directory layouts
-            if [ -d /opt/slonk-arb ]; then
-                APP_DIR=/opt/slonk-arb
-                DATA_DIR=/var/lib/slonk-arb
-                SVC=slonk-arb
-                OWNER=slonk
-            else
-                APP_DIR=/opt/kalshi-arb
-                DATA_DIR=/var/lib/kalshi-arb
-                SVC=kalshi-arb
-                OWNER=kalshi
-            fi
-            cd "$APP_DIR"
+            cd /opt/slonk-arb
             git reset --hard origin/main
             git pull origin main
             uv sync
-            sed "s|slonk-arb|${SVC}|g; s|slonk|${OWNER}|g" "$APP_DIR/deploy/slonk-arb.cron" | sudo tee /etc/cron.d/"$SVC" > /dev/null
-            sudo systemctl restart "$SVC"
+            sudo cp /opt/slonk-arb/deploy/slonk-arb.cron /etc/cron.d/slonk-arb
+            # Create .env from GitHub secret if missing
+            if [ ! -f /var/lib/slonk-arb/.env ]; then
+                echo "ANTHROPIC_API_KEY=$ANTHROPIC_KEY" | sudo tee /var/lib/slonk-arb/.env > /dev/null
+                sudo chown slonk:slonk /var/lib/slonk-arb/.env
+                sudo chmod 600 /var/lib/slonk-arb/.env
+            fi
+            sudo systemctl restart slonk-arb
         env:
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}

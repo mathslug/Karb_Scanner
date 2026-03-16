@@ -4,11 +4,11 @@
 set -euo pipefail
 
 HOST="almalinux@slonkn.mathslug.com"
-LOG_DIR="/var/log/kalshi-arb"
-DATA_DIR="/var/lib/kalshi-arb"
+LOG_DIR="/var/log/slonk-arb"
+DATA_DIR="/var/lib/slonk-arb"
 
 echo "==> Pulling DB..."
-scp "$HOST:$DATA_DIR/kalshi_arb.db" kalshi_arb_prod.db
+scp "$HOST:$DATA_DIR/slonk_arb.db" kalshi_arb_prod.db
 
 echo "==> Pulling logs..."
 scp "$HOST:$LOG_DIR/cron.log" cron.log

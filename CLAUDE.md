@@ -204,9 +204,9 @@ Deployed to a single Digital Ocean droplet (AlmaLinux) at `slonkn.mathslug.com`.
 ### Server layout
 
 ```
-/opt/kalshi-arb/              # Code (git clone, deployed via GitHub Actions)
-/var/lib/kalshi-arb/          # Persistent data (DB, .env, backups/)
-/var/log/kalshi-arb/          # Log files (scan.log, evaluate.log, cron.log)
+/opt/slonk-arb/              # Code (git clone, deployed via GitHub Actions)
+/var/lib/slonk-arb/          # Persistent data (DB, .env, backups/)
+/var/log/slonk-arb/          # Log files (scan.log, evaluate.log, cron.log)
 ```
 
 ### Stack
@@ -218,9 +218,11 @@ Deployed to a single Digital Ocean droplet (AlmaLinux) at `slonkn.mathslug.com`.
 
 ### Deploy scripts
 
-- **`deploy/setup.sh`** -- idempotent server provisioning (run as root). Creates user, dirs, nginx config, systemd unit, cron jobs.
+- **`deploy/cloud-init.yml`** -- cloud-config user-data for first-boot provisioning of a new droplet. Installs packages, creates users, clones repo, sets up nginx/systemd/cron/SELinux.
+- **`deploy/rebuild.sh`** -- local script to finish provisioning after cloud-init: waits for DNS + cloud-init, pushes secrets and DB, runs certbot, starts webapp. Usage: `bash deploy/rebuild.sh <IP> [--db path/to/backup.db]`
+- **`deploy/setup.sh`** -- standalone fallback for manual provisioning (run as root on server).
 - **`deploy/run.sh`** -- cron wrapper that loads `.env` and runs commands via `uv run`.
-- **`.github/workflows/deploy.yml`** -- GitHub Actions: `git pull` + `uv sync` + create `.env` from `ANTHROPIC_KEY` secret if missing + restart webapp on push to `main`.
+- **`.github/workflows/deploy.yml`** -- GitHub Actions: `git pull` + `uv sync` + install crontab + restart webapp on push to `main`.
 
 ### Cron schedule (ET / UTC)
 
@@ -230,7 +232,7 @@ Deployed to a single Digital Ocean droplet (AlmaLinux) at `slonkn.mathslug.com`.
 | 6:00 AM | 10:00 | `fetch_yields.py` -- Treasury yield curve |
 | 6:30 AM | 10:30 | `scan.py --from-db --filter tennis --min-volume 200` && `evaluate.py` && `evaluate.py --mode high` (chained) |
 | 2:00 PM | 18:00 | `evaluate.py` -- afternoon orderbook refresh |
-| Sun 3 AM | Sun 7:00 | DB backup to `/var/lib/kalshi-arb/backups/` |
+| Sun 3 AM | Sun 7:00 | DB backup to `/var/lib/slonk-arb/backups/` |
 
 ### Email notifications
 
@@ -249,4 +251,4 @@ NOTIFY_EMAIL=...
 
 - `DROPLET_URL` -- server hostname (e.g. slonkn.mathslug.com)
 - `SSH_PRIVATE_KEY` -- deploy user's private key
-- `ANTHROPIC_KEY` -- Anthropic API key (used to create `.env` on fresh deploys)
+- `ANTHROPIC_KEY` -- Anthropic API key (written to `.env` on first deploy if missing)

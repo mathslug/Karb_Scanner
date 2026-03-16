@@ -1,0 +1,114 @@
+#cloud-config
+# First-boot provisioning for slonk-arb on AlmaLinux 10.
+# Passed as user-data when creating the droplet.
+#
+# After cloud-init completes, run deploy/rebuild.sh to push secrets,
+# DB, SSL, and start the webapp.
+
+users:
+  - name: almalinux
+    groups: wheel
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDO9yhlW9dn/k4AZrhFsMvYji+FD5mLOjEhWL+7RWz6LDZb6lnOgfeHrCd6lyuweKpMDLx5+JKlfMqGP1qYVsb2lmeLYbK3/wi8ndSlpq8hEB0uhfREardHsJ5gNWVIVxug7LQ5tFbG52flINpCyTiNb1hb5vqSt/KWNJs3BfOZQwyXnMwKpaEfCAc/UQanQK7/MqOL/Ao6xVp1wowC58WxD1QMWblBpzoxWlstFvuqLpu7SRWDvPw+0WU9L6oobC4MEenKcp8js4cERVOeMfXuf9lW5HO7RbwESRFYrpGP+QbqVH16dKXQhMMV0eaofmER16iWg53P1akrUe8Kdp+EqGtVz0PjryG8U9f1OOscuO5yugn9mgPR6k/vQmyTsRt9ntz1yAz7CZarr6gNqbObYoRYO6Eb6MEAliKF0f1OjNtUYmYKRVsiBKwVkacZzy5exVSN8yErLSRu1Qj/UzgluWJMjqT9/y2gxHT8SFyAmg0YKAKsRAFbOvb+igeAwls= johnbentley@oldblue.lan
+
+  - name: slonk
+    system: true
+    shell: /sbin/nologin
+    homedir: /home/slonk
+
+  - name: deploy
+    groups: slonk
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILVRD/Y7Go56857pe1H3wzew5jzQUIkHsHJnzK1npkpo github-actions-deploy
+
+write_files:
+  - path: /etc/environment
+    content: |
+      UV_PYTHON_INSTALL_DIR=/opt/uv-python
+
+  - path: /etc/sudoers.d/deploy
+    permissions: "0440"
+    content: |
+      deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart slonk-arb, /usr/bin/systemctl reload nginx, /usr/bin/tee /var/lib/slonk-arb/.env, /usr/bin/tee -a /var/lib/slonk-arb/.env, /usr/bin/chown slonk\:slonk /var/lib/slonk-arb/.env, /usr/bin/chmod 600 /var/lib/slonk-arb/.env, /usr/bin/grep * /var/lib/slonk-arb/.env, /usr/bin/sed -i * /etc/nginx/conf.d/slonk-arb.conf, /usr/bin/cp /opt/slonk-arb/deploy/slonk-arb.cron /etc/cron.d/slonk-arb
+
+  - path: /etc/nginx/conf.d/slonk-arb.conf
+    content: |
+      server {
+          listen 80;
+          server_name slonkn.mathslug.com;
+
+          location / {
+              proxy_pass http://127.0.0.1:8000;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+      }
+
+  - path: /etc/systemd/system/slonk-arb.service
+    content: |
+      [Unit]
+      Description=Slonk Arb Webapp
+      After=network.target
+
+      [Service]
+      User=slonk
+      Group=slonk
+      WorkingDirectory=/opt/slonk-arb
+      EnvironmentFile=/var/lib/slonk-arb/.env
+      Environment=SLONK_DB=/var/lib/slonk-arb/slonk_arb.db
+      ExecStart=/opt/slonk-arb/.venv/bin/gunicorn --bind 127.0.0.1:8000 --workers 2 "app:create_app()"
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Packages (epel-release first — certbot and python3-certbot-nginx live in EPEL)
+  - dnf install -y epel-release
+  - dnf install -y nginx certbot python3-certbot-nginx cronie git policycoreutils-python-utils
+
+  # Directories
+  - mkdir -p /var/lib/slonk-arb/backups /var/log/slonk-arb /home/slonk/.cache
+  - chown slonk:slonk /var/lib/slonk-arb /var/lib/slonk-arb/backups /var/log/slonk-arb /home/slonk /home/slonk/.cache
+  - touch /var/log/slonk-arb/{cron,scan,evaluate,evaluate-high,evaluate-afternoon}.log
+  - chown slonk:slonk /var/log/slonk-arb/*.log
+
+  # Install uv
+  - curl -LsSf https://astral.sh/uv/install.sh | sh
+  - cp /root/.local/bin/uv /usr/local/bin/uv
+  - cp /root/.local/bin/uvx /usr/local/bin/uvx
+  - chmod 755 /usr/local/bin/uv /usr/local/bin/uvx
+
+  # Clone repo and install deps
+  - git clone https://github.com/mathslug/slonkNugz.git /opt/slonk-arb
+  - cd /opt/slonk-arb && UV_PYTHON_INSTALL_DIR=/opt/uv-python /usr/local/bin/uv sync
+
+  # File ownership
+  - chown -R deploy:slonk /opt/slonk-arb
+  - chmod -R g+rw /opt/slonk-arb
+  - chown -R slonk:slonk /opt/slonk-arb/.venv
+
+  # SELinux
+  - semanage fcontext -a -t bin_t '/opt/slonk-arb/.venv/bin(/.*)?' 2>/dev/null || true
+  - semanage fcontext -a -t bin_t '/opt/uv-python/.*/bin(/.*)?' 2>/dev/null || true
+  - semanage fcontext -a -t cron_log_t '/var/log/slonk-arb(/.*)?' 2>/dev/null || true
+  - restorecon -Rv /opt/slonk-arb/.venv/bin/ /opt/uv-python/ /var/log/slonk-arb 2>/dev/null || true
+  - setsebool -P httpd_can_network_connect 1
+
+  # Services
+  - systemctl daemon-reload
+  - systemctl enable --now nginx
+  - nginx -t && systemctl reload nginx
+  - systemctl enable slonk-arb
+  - systemctl enable --now crond
+
+  # Cron
+  - cp /opt/slonk-arb/deploy/slonk-arb.cron /etc/cron.d/slonk-arb
+  - chmod 644 /etc/cron.d/slonk-arb
+
+  # Sentinel
+  - touch /var/lib/slonk-arb/.cloud-init-done
