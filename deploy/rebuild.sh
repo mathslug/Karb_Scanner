@@ -54,7 +54,6 @@ fi
 
 echo "    Droplet $DROPLET_ID created at $IP"
 
-# Move into DO project
 PROJECT_ID=$(doctl projects list --format ID,Name --no-header 2>/dev/null | grep "$DO_PROJECT" | awk '{print $1}')
 if [[ -n "$PROJECT_ID" ]]; then
     doctl projects resources assign "$PROJECT_ID" --resource="do:droplet:$DROPLET_ID" >/dev/null 2>&1
@@ -87,7 +86,7 @@ if [[ -n "$DB_FILE" ]]; then
     echo "    Done."
 fi
 
-# ── Phase 4: DNS ─────────────────────────────────────────────────────────
+# ── Phase 4: DNS ────────────────────────────────────────────────────────
 echo ""
 echo "==> Checking DNS for $DOMAIN -> $IP"
 RESOLVED=$(dig +short "$DOMAIN" 2>/dev/null | tail -1)
@@ -111,7 +110,7 @@ else
     echo "    DNS already correct."
 fi
 
-# ── Phase 6: SSL ─────────────────────────────────────────────────────────
+# ── Phase 5: SSL ─────────────────────────────────────────────────────────
 echo ""
 echo "==> Setting up SSL with certbot"
 ssh "$SSH_USER@$IP" "
@@ -119,16 +118,7 @@ ssh "$SSH_USER@$IP" "
 "
 echo "    Done."
 
-# ── Phase 7: Deploy and verify webapp ─────────────────────────────────────
-echo ""
-echo "==> Push a commit to main to trigger deploy, then press Enter."
-read -r
-echo "    Waiting for webapp to start..."
-sleep 15
-HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://$DOMAIN/" --max-time 10 2>/dev/null || echo "000")
-echo "    https://$DOMAIN/ returned HTTP $HTTP_CODE"
-
-# ── Phase 8: Clean up old droplets in project ────────────────────────────
+# ── Phase 6: Clean up old droplets ────────────────────────────────────────
 echo ""
 if [[ -n "$PROJECT_ID" ]]; then
     PROJECT_DROPLET_IDS=$(doctl projects resources list "$PROJECT_ID" --format URN --no-header 2>/dev/null \
@@ -151,3 +141,4 @@ fi
 
 echo ""
 echo "==> Done! App accessible at https://$DOMAIN/"
+echo "    Push to main to deploy secrets (LLM access + admin auth)."

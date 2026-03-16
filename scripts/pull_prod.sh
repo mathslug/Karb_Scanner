@@ -15,6 +15,7 @@ scp "$HOST:$LOG_DIR/cron.log" cron.log
 scp "$HOST:$LOG_DIR/scan.log" scan.log
 scp "$HOST:$LOG_DIR/evaluate.log" evaluate.log
 scp "$HOST:$LOG_DIR/evaluate-high.log" evaluate-high.log
+scp "$HOST:$LOG_DIR/evaluate-afternoon.log" evaluate-afternoon.log
 
 echo "==> Done. Files:"
-ls -lh slonk_arb_prod.db cron.log scan.log evaluate.log evaluate-high.log
+ls -lh slonk_arb_prod.db cron.log scan.log evaluate.log evaluate-high.log evaluate-afternoon.log

@@ -219,7 +219,7 @@ Deployed to a single Digital Ocean droplet (AlmaLinux 10, s-1vcpu-512mb-10gb) at
 ### Deploy scripts
 
 - **`deploy/cloud-init.yml`** -- cloud-config user-data for first-boot provisioning of a new droplet. Installs packages, creates users, clones repo, sets up nginx/systemd/cron/SELinux.
-- **`deploy/rebuild.sh`** -- local script to finish provisioning after cloud-init: waits for DNS + cloud-init, pushes secrets and DB, runs certbot, starts webapp. Usage: `bash deploy/rebuild.sh <IP> [--db path/to/backup.db]`
+- **`deploy/rebuild.sh`** -- creates a new droplet via doctl, waits for cloud-init, pushes DB, sets up DNS + SSL, triggers deploy, and cleans up old droplets. Usage: `bash deploy/rebuild.sh [--db path/to/backup.db]`
 - **`deploy/run.sh`** -- cron wrapper that loads `.env` and runs commands via `uv run`.
 - **`.github/workflows/deploy.yml`** -- GitHub Actions: `git pull` + `uv sync` + install crontab + restart webapp on push to `main`.
 
