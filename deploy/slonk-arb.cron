@@ -4,7 +4,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 
 # Fetch all sports tickers into DB (no LLM calls)
 # 10:00 AM ET (14:00 UTC)
-0 15 * * * slonk /opt/slonk-arb/deploy/run.sh scan.py --category Sports --max-pairs 0 --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/scan.log >> /var/log/slonk-arb/cron.log 2>&1
+10 15 * * * slonk /opt/slonk-arb/deploy/run.sh scan.py --category Sports --max-pairs 0 --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/scan.log >> /var/log/slonk-arb/cron.log 2>&1
 
 # Fetch Treasury yields daily at 10:45 AM ET (14:45 UTC)
 45 15 * * * slonk /opt/slonk-arb/deploy/run.sh fetch_yields.py --db /var/lib/slonk-arb/slonk_arb.db >> /var/log/slonk-arb/cron.log 2>&1
