@@ -1,71 +1,64 @@
 #!/usr/bin/env bash
-# Provision a new slonk-arb droplet after cloud-init has finished.
+# Create and provision a new slonk-arb droplet from scratch.
 #
-# Prerequisites:
-#   1. Create an AlmaLinux 10 droplet in the DigitalOcean console with:
-#      - Image: AlmaLinux 10
-#      - Size: s-1vcpu-512mb-10gb ($4/mo) or similar
-#      - Region: nyc1
-#      - User data: paste contents of deploy/cloud-init.yml
-#      - SSH key: your personal key (johnbentley@oldblue.lan)
-#   2. Update DNS: point slonkn.mathslug.com A record to the new IP
+# Requires: doctl (authenticated), SSH key on DO account.
 #
-# .env is created by GitHub Actions deploy (ANTHROPIC_KEY secret).
-# Push a commit to main after this script finishes to trigger it.
+# .env is created by GitHub Actions deploy (ANTHROPIC_KEY + SLONK_ADMIN_PASS).
+# The script prompts you to push to main to trigger the deploy.
 #
 # Usage:
-#   bash deploy/rebuild.sh <NEW_IP> [--db path/to/backup.db]
+#   bash deploy/rebuild.sh [--db path/to/backup.db]
 #
 set -euo pipefail
 
 DOMAIN=slonkn.mathslug.com
 SSH_USER=almalinux
 SENTINEL=/var/lib/slonk-arb/.cloud-init-done
+DO_PROJECT=SlonkN
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ── Parse args ────────────────────────────────────────────────────────────
-IP=""
 DB_FILE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --db) DB_FILE="$2"; shift 2 ;;
-        *)    IP="$1"; shift ;;
+        *)    echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
-
-if [[ -z "$IP" ]]; then
-    echo "Usage: bash deploy/rebuild.sh <NEW_IP> [--db path/to/backup.db]"
-    exit 1
-fi
 
 if [[ -n "$DB_FILE" && ! -f "$DB_FILE" ]]; then
     echo "ERROR: DB file not found: $DB_FILE"
     exit 1
 fi
 
-echo "==> Target: $SSH_USER@$IP ($DOMAIN)"
+# ── Phase 1: Create droplet ──────────────────────────────────────────────
+echo "==> Creating droplet..."
+DROPLET_INFO=$(doctl compute droplet create slonk-arb \
+    --image almalinux-10-x64 \
+    --size s-1vcpu-512mb-10gb \
+    --region nyc1 \
+    --ssh-keys "$(doctl compute ssh-key list --format ID --no-header | head -1)" \
+    --user-data-file "$SCRIPT_DIR/cloud-init.yml" \
+    --wait \
+    --format ID,PublicIPv4 \
+    --no-header 2>&1)
 
-# ── Phase 1: Wait for DNS ────────────────────────────────────────────────
-echo ""
-echo "==> Checking DNS for $DOMAIN -> $IP"
-RESOLVED=$(dig +short "$DOMAIN" 2>/dev/null | tail -1)
-if [[ "$RESOLVED" != "$IP" ]]; then
-    echo "    DNS currently resolves to: ${RESOLVED:-<nothing>}"
-    echo "    Update the A record for $DOMAIN to $IP in Namecheap, then press Enter."
-    read -r
-    echo "    Waiting for DNS propagation..."
-    DNS_WAIT=15
-    while true; do
-        RESOLVED=$(dig +short "$DOMAIN" 2>/dev/null | tail -1)
-        if [[ "$RESOLVED" == "$IP" ]]; then
-            echo "    DNS resolved!"
-            break
-        fi
-        echo "    Still resolving to: ${RESOLVED:-<nothing>} (retrying in ${DNS_WAIT}s)"
-        sleep "$DNS_WAIT"
-        DNS_WAIT=$(( DNS_WAIT * 2 > 120 ? 120 : DNS_WAIT * 2 ))
-    done
-else
-    echo "    DNS already correct."
+DROPLET_ID=$(echo "$DROPLET_INFO" | awk '{print $1}')
+IP=$(echo "$DROPLET_INFO" | awk '{print $2}')
+
+if [[ -z "$IP" || "$IP" == "Error"* ]]; then
+    echo "ERROR: Failed to create droplet"
+    echo "$DROPLET_INFO"
+    exit 1
+fi
+
+echo "    Droplet $DROPLET_ID created at $IP"
+
+# Move into DO project
+PROJECT_ID=$(doctl projects list --format ID,Name --no-header 2>/dev/null | grep "$DO_PROJECT" | awk '{print $1}')
+if [[ -n "$PROJECT_ID" ]]; then
+    doctl projects resources assign "$PROJECT_ID" --resource="do:droplet:$DROPLET_ID" >/dev/null 2>&1
+    echo "    Assigned to project $DO_PROJECT"
 fi
 
 # ── Phase 2: Wait for cloud-init ─────────────────────────────────────────
@@ -94,7 +87,31 @@ if [[ -n "$DB_FILE" ]]; then
     echo "    Done."
 fi
 
-# ── Phase 4: SSL ─────────────────────────────────────────────────────────
+# ── Phase 4: DNS ─────────────────────────────────────────────────────────
+echo ""
+echo "==> Checking DNS for $DOMAIN -> $IP"
+RESOLVED=$(dig +short "$DOMAIN" 2>/dev/null | tail -1)
+if [[ "$RESOLVED" != "$IP" ]]; then
+    echo "    DNS currently resolves to: ${RESOLVED:-<nothing>}"
+    echo "    Update the A record for $DOMAIN to $IP in Namecheap, then press Enter."
+    read -r
+    echo "    Waiting for DNS propagation..."
+    DNS_WAIT=15
+    while true; do
+        RESOLVED=$(dig +short "$DOMAIN" 2>/dev/null | tail -1)
+        if [[ "$RESOLVED" == "$IP" ]]; then
+            echo "    DNS resolved!"
+            break
+        fi
+        echo "    Still resolving to: ${RESOLVED:-<nothing>} (retrying in ${DNS_WAIT}s)"
+        sleep "$DNS_WAIT"
+        DNS_WAIT=$(( DNS_WAIT * 2 > 120 ? 120 : DNS_WAIT * 2 ))
+    done
+else
+    echo "    DNS already correct."
+fi
+
+# ── Phase 6: SSL ─────────────────────────────────────────────────────────
 echo ""
 echo "==> Setting up SSL with certbot"
 ssh "$SSH_USER@$IP" "
@@ -102,20 +119,35 @@ ssh "$SSH_USER@$IP" "
 "
 echo "    Done."
 
-# ── Phase 5: Verify HTTP ─────────────────────────────────────────────────
+# ── Phase 7: Deploy and verify webapp ─────────────────────────────────────
 echo ""
-echo "==> Verifying HTTPS is up (nginx only, webapp not started yet)..."
-sleep 2
+echo "==> Push a commit to main to trigger deploy, then press Enter."
+read -r
+echo "    Waiting for webapp to start..."
+sleep 15
 HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://$DOMAIN/" --max-time 10 2>/dev/null || echo "000")
 echo "    https://$DOMAIN/ returned HTTP $HTTP_CODE"
 
+# ── Phase 8: Clean up old droplets in project ────────────────────────────
 echo ""
-echo "==> Server is ready!"
-echo "    IP:     $IP"
-echo "    Domain: https://$DOMAIN/"
+if [[ -n "$PROJECT_ID" ]]; then
+    PROJECT_DROPLET_IDS=$(doctl projects resources list "$PROJECT_ID" --format URN --no-header 2>/dev/null \
+        | grep '^do:droplet:' | sed 's/do:droplet://' | grep -v "$DROPLET_ID" || true)
+    if [[ -n "$PROJECT_DROPLET_IDS" ]]; then
+        echo "==> Old droplets in $DO_PROJECT project:"
+        for OLD_ID in $PROJECT_DROPLET_IDS; do
+            doctl compute droplet get "$OLD_ID" --format ID,Name,PublicIPv4 --no-header 2>/dev/null
+        done
+        echo "    Destroy them? [y/N]"
+        read -r CONFIRM
+        if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+            for OLD_ID in $PROJECT_DROPLET_IDS; do
+                doctl compute droplet delete "$OLD_ID" --force
+                echo "    Destroyed $OLD_ID"
+            done
+        fi
+    fi
+fi
+
 echo ""
-echo "Next steps:"
-echo "  1. Push a commit to main -- GitHub Actions will deploy code, create .env, and start the webapp"
-echo "  2. Verify: curl https://$DOMAIN/"
-echo "  3. Check cron: ssh $SSH_USER@$IP 'tail -50 /var/log/slonk-arb/cron.log'"
-echo "  (If the domain changed, update DROPLET_URL GitHub secret)"
+echo "==> Done! App accessible at https://$DOMAIN/"
