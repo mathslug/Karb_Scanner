@@ -24,10 +24,12 @@ def send_buy_alert(results: list[dict]) -> bool:
     total_capital = sum(r.get("total_cost", 0) for r in buys)
     lines = [f"Found {len(buys)} BUY recommendation(s). Total capital: ${total_capital:.2f}\n"]
     for r in sorted(buys, key=lambda x: -(x.get("excess_yield") or 0)):
+        ann_pct = r['annualized_yield'] * 100 if r.get('annualized_yield') is not None else 0
+        exc_pct = r['excess_yield'] * 100 if r.get('excess_yield') is not None else 0
         lines.append(
             f"  Pair #{r['pair_id']:>3}  n={r['n_contracts']:>4}  "
-            f"yield={r['annualized_yield'] * 100:>6.2f}%  "
-            f"excess={r['excess_yield'] * 100:>+6.2f}%  "
+            f"yield={ann_pct:>6.2f}%  "
+            f"excess={exc_pct:>+6.2f}%  "
             f"cost=${r['total_cost']:>8.2f}"
         )
 

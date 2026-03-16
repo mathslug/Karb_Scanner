@@ -49,7 +49,7 @@ def fetch_series(category: str, filter_term: str | None) -> list[dict]:
             break
 
     if filter_term:
-        terms = [t.strip().lower() for t in filter_term.split(",")]
+        terms = _expand_filter_terms([t.strip().lower() for t in filter_term.split(",")])
         series = [
             s for s in series
             if any(
@@ -357,6 +357,15 @@ def _get_sport(series_ticker: str) -> str | None:
         if series_ticker.startswith(prefix):
             return _PREFIX_TO_SPORT[prefix]
     return None
+
+
+def _expand_filter_terms(raw_terms: list[str]) -> list[str]:
+    """Expand sport family names into series ticker prefixes via SPORT_FAMILIES."""
+    expanded = list(raw_terms)
+    for term in raw_terms:
+        if term in SPORT_FAMILIES:
+            expanded.extend(p.lower() for p in SPORT_FAMILIES[term])
+    return expanded
 
 
 ENTITY_BLOCKLIST = {
@@ -734,7 +743,7 @@ def main() -> None:
 
     # Apply --filter to restrict which entity groups go to LLM screening
     if args.filter:
-        terms = [t.strip().lower() for t in args.filter.split(",")]
+        terms = _expand_filter_terms([t.strip().lower() for t in args.filter.split(",")])
         filtered_groups = {}
         for entity, entity_markets in groups.items():
             if any(

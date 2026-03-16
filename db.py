@@ -692,38 +692,6 @@ def get_pair_stats(conn: sqlite3.Connection) -> dict:
     return dict(row)
 
 
-def import_from_cache(
-    conn: sqlite3.Connection,
-    cache_path: str,
-    results_path: str | None = None,
-) -> tuple[int, int]:
-    """Bootstrap DB from existing JSON cache and optional scan results.
-
-    Returns (tickers_imported, pairs_imported).
-    """
-    with open(cache_path) as f:
-        cache = json.load(f)
-
-    markets = cache.get("markets", [])
-    new, updated = upsert_tickers(conn, markets)
-    ticker_count = new + updated
-
-    pair_count = 0
-    if results_path:
-        with open(results_path) as f:
-            results = json.load(f)
-        for r in results:
-            ant = r.get("antecedent_ticker")
-            con = r.get("consequent_ticker")
-            if not ant or not con:
-                continue
-            r["ticker_a"] = ant
-            r["ticker_b"] = con
-        pair_count = bulk_upsert_pair_results(conn, results, model="imported")
-
-    return ticker_count, pair_count
-
-
 # ---------------------------------------------------------------------------
 # Trade evaluation helpers
 # ---------------------------------------------------------------------------

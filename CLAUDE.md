@@ -67,11 +67,6 @@ uv run app.py                                       # http://localhost:5001
 SLONK_DB=my.db uv run app.py                       # custom DB path
 ```
 
-### Import from legacy JSON cache
-```
-uv run python -c "import db; conn = db.get_connection(); db.import_from_cache(conn, 'sports_cache.json', 'scan_results.json')"
-```
-
 ### CLI args -- main.py
 - `-n` / `--contracts` -- number of contract pairs (default 100)
 - `--rfr` -- risk-free rate (default 0.035)
@@ -145,7 +140,6 @@ All take `conn: sqlite3.Connection` as first arg:
 - `get_pair_detail(conn, pair_id)` -- full info for a single pair
 - `set_review(conn, pair_id, decision)` -- set human review
 - `upsert_trade_signal(conn, eval_dict)` -- insert/update trade signal from evaluation
-- `import_from_cache(conn, cache_path, results_path)` -- bootstrap from JSON
 
 ## Review webapp
 
@@ -227,9 +221,9 @@ Deployed to a single Digital Ocean droplet (AlmaLinux 10, s-1vcpu-512mb-10gb) at
 
 | Time ET | UTC | Job |
 |---------|-----|-----|
-| 3:55 PM | 19:55 | `scan.py --category Sports --filter tennis --max-pairs 0` -- fetch tennis tickers into DB (no LLM) |
-| 4:15 PM | 20:15 | `fetch_yields.py` + `scan.py --from-db --filter tennis --min-volume 200` + `evaluate.py` + `evaluate.py --mode high` (chained) |
-| 4:35 PM | 20:35 | `evaluate.py` -- evening orderbook refresh |
+| 5:00 PM | 21:00 | `scan.py --category Sports --filter tennis --max-pairs 0` -- fetch tennis tickers into DB (no LLM) |
+| 5:20 PM | 21:20 | `fetch_yields.py` + `scan.py --from-db --filter tennis --min-volume 200` + `evaluate.py` + `evaluate.py --mode high` (chained) |
+| 5:40 PM | 21:40 | `evaluate.py` -- evening orderbook refresh |
 | Sun 3 AM | Sun 7:00 | DB backup to `/var/lib/slonk-arb/backups/` |
 
 ### Email notifications
