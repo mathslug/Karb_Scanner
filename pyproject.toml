@@ -1,5 +1,5 @@
 [project]
-name = "kalshi-arb"
+name = "slonk-arb"
 version = "0.1.0"
 description = "Kalshi cross-market arbitrage checker for French Open / Grand Slam tennis markets"
 readme = "README.md"

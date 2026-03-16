@@ -2,7 +2,7 @@
 """Print full details for BUY signal pairs, sorted by excess yield.
 
 Usage:
-    uv run scripts/pair_details.py                      # all BUYs from kalshi_arb_prod.db
+    uv run scripts/pair_details.py                      # all BUYs from slonk_arb_prod.db
     uv run scripts/pair_details.py --db slonk_arb.db    # custom DB
     uv run scripts/pair_details.py --limit 10            # top 10 only
     uv run scripts/pair_details.py --pair-id 5829        # single pair deep dive
@@ -102,7 +102,7 @@ def print_pair(e: dict, rules: dict[str, str], index: int | None = None) -> None
 
 def main():
     parser = argparse.ArgumentParser(description="Print full details for BUY signal pairs")
-    parser.add_argument("--db", default="kalshi_arb_prod.db", help="SQLite database path")
+    parser.add_argument("--db", default="slonk_arb_prod.db", help="SQLite database path")
     parser.add_argument("--limit", type=int, default=0, help="Show only top N pairs")
     parser.add_argument("--pair-id", type=int, default=0, help="Show a single pair by ID")
     args = parser.parse_args()

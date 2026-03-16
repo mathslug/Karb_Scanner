@@ -67,7 +67,7 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
-  # Packages (epel-release first — certbot and python3-certbot-nginx live in EPEL)
+  # Packages (epel-release first -- certbot and python3-certbot-nginx live in EPEL)
   - dnf install -y epel-release
   - dnf install -y nginx certbot python3-certbot-nginx cronie git policycoreutils-python-utils
 

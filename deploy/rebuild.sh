@@ -4,7 +4,7 @@
 # Prerequisites:
 #   1. Create an AlmaLinux 10 droplet in the DigitalOcean console with:
 #      - Image: AlmaLinux 10
-#      - Size: s-1vcpu-1gb (or similar)
+#      - Size: s-1vcpu-512mb-10gb ($4/mo) or similar
 #      - Region: nyc1
 #      - User data: paste contents of deploy/cloud-init.yml
 #      - SSH key: your personal key (johnbentley@oldblue.lan)

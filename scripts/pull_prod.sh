@@ -8,7 +8,7 @@ LOG_DIR="/var/log/slonk-arb"
 DATA_DIR="/var/lib/slonk-arb"
 
 echo "==> Pulling DB..."
-scp "$HOST:$DATA_DIR/slonk_arb.db" kalshi_arb_prod.db
+scp "$HOST:$DATA_DIR/slonk_arb.db" slonk_arb_prod.db
 
 echo "==> Pulling logs..."
 scp "$HOST:$LOG_DIR/cron.log" cron.log
@@ -17,4 +17,4 @@ scp "$HOST:$LOG_DIR/evaluate.log" evaluate.log
 scp "$HOST:$LOG_DIR/evaluate-high.log" evaluate-high.log
 
 echo "==> Done. Files:"
-ls -lh kalshi_arb_prod.db cron.log scan.log evaluate.log evaluate-high.log
+ls -lh slonk_arb_prod.db cron.log scan.log evaluate.log evaluate-high.log
