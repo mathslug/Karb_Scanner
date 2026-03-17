@@ -73,7 +73,7 @@ SLONK_DB=my.db uv run app.py                       # custom DB path
 - `--buffer` -- buffer above RFR (default 0.01)
 
 ### CLI args -- scan.py
-- `--filter` / `-f` -- comma-separated Kalshi API tags to filter series (e.g. "tennis" or "Tennis,Soccer"). Uses the `tags` query parameter on the `/series` endpoint for server-side filtering.
+- `--filter` / `-f` -- comma-separated sport/competition names to filter (e.g. "tennis", "tennis,hockey", "tennis,pro football"). Values map to `sub_sport` for local entity filtering; special values like "pro football" and "college football" are translated to the correct Kalshi API tag ("Football") for fetching.
 - `--model` -- Anthropic model name (default: `claude-sonnet-4-6`)
 - `--min-volume` -- exclude markets below this volume (default: 0)
 - `--batch-size` -- pairs per LLM call (default: 12)
@@ -94,11 +94,11 @@ SLONK_DB=my.db uv run app.py                       # custom DB path
 
 ```
 Fetch series for category (filtered by API tags if --filter) -> Fetch events + nested markets per series
-  -> Extract minimal market representations + sport_tag from series tags
+  -> Extract minimal market representations + sport_tag from series tags + sub_sport from event product_metadata
   -> Upsert tickers into SQLite DB + deactivate missing tickers
   -> Group markets by entity (yes_sub_title) from DB
-  -> Apply sport_tag filter + min-volume at entity/pair level
-  -> Generate cross-series candidate pairs per entity (reject cross-sport pairs via sport_tag)
+  -> Apply sub_sport filter + min-volume at entity/pair level
+  -> Generate cross-series candidate pairs per entity (reject cross-sub_sport pairs)
   -> Filter out already-screened pairs (unless --rescan)
   -> LLM screens each pair for logical implication (A YES -> B YES?)
   -> Store ALL results in DB (including "none" and "need_more_info" confidence)
@@ -107,7 +107,7 @@ Fetch series for category (filtered by API tags if --filter) -> Fetch events + n
 
 ### Pre-filtering strategy
 
-Implication relationships almost always involve the same entity: "Alcaraz wins FO" -> "Alcaraz wins a GS". Grouping by `yes_sub_title` then only pairing across different series is a near-perfect pre-filter that reduces O(n^2) to ~50-200 candidates. Cross-sport pairs (different `sport_tag`) are also rejected, using the tag from the Kalshi API series `tags` field.
+Implication relationships almost always involve the same entity: "Alcaraz wins FO" -> "Alcaraz wins a GS". Grouping by `yes_sub_title` then only pairing across different series is a near-perfect pre-filter that reduces O(n^2) to ~50-200 candidates. Cross-sport pairs (different `sub_sport`) are also rejected. `sub_sport` is derived from event `product_metadata.competition` for Football (giving "Pro Football" vs "College Football"), otherwise falls back to `sport_tag` from the series `tags` field.
 
 ### LLM screening
 
@@ -117,7 +117,7 @@ Uses Claude Sonnet via the Anthropic API. The prompt requests `ticker_a`/`ticker
 
 SQLite database (`slonk_arb.db` by default) with five tables:
 
-- **`tickers`** -- all market info fetched from Kalshi (ticker, series, event, title, prices, volume, sport_tag, timestamps). Primary key: `ticker`. Price columns are the "latest" cache, overwritten each scan. `sport_tag` stores the first tag from the series' `tags` array (e.g., "Tennis").
+- **`tickers`** -- all market info fetched from Kalshi (ticker, series, event, title, prices, volume, sport_tag, sub_sport, timestamps). Primary key: `ticker`. Price columns are the "latest" cache, overwritten each scan. `sport_tag` stores the first tag from the series' `tags` array (e.g., "Tennis"). `sub_sport` is a derived field: for Football series, uses `event.product_metadata.competition` (e.g., "Pro Football", "College Football"); for all other sports, equals `sport_tag`.
 - **`prices`** -- append-only price history. One row per ticker per scan with `last_price`, `yes_ask`, `no_ask`, and `recorded_at` timestamp. Populated by `record_prices()` during each scan.
 - **`candidate_pairs`** -- LLM screening results with `ticker_a`/`ticker_b` (always stored in sorted order), `antecedent_ticker`/`consequent_ticker`, confidence (`high`/`medium`/`low`/`need_more_info`/`none`), reasoning, and `human_review` (confirmed/rejected/NULL).
 - **`trade_evaluations`** -- append-only evaluation results per pair (orderbook snapshots, yields, costs, recommendation).
@@ -220,7 +220,7 @@ Deployed to a single Digital Ocean droplet (AlmaLinux 10, s-1vcpu-512mb-10gb) at
 | Time ET | UTC | Job |
 |---------|-----|-----|
 | 3:30 AM | 07:30 | `scan.py --category Sports --max-pairs 0` -- fetch all sports tickers into DB (no LLM) |
-| 4:00 AM | 08:00 | `fetch_yields.py` + `scan.py --from-db --filter tennis --min-volume 200` + `evaluate.py` + `evaluate.py --mode high` (chained) |
+| 4:00 AM | 08:00 | `fetch_yields.py` + `scan.py --from-db --filter "tennis,hockey" --min-volume 200` + `evaluate.py` + `evaluate.py --mode high` (chained) |
 | Sun 3 AM | Sun 7:00 | DB backup to `/var/lib/slonk-arb/backups/` |
 
 ### Email notifications
