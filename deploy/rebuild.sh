@@ -77,11 +77,11 @@ done
 if [[ -n "$DB_FILE" ]]; then
     echo ""
     echo "==> Pushing DB: $DB_FILE"
-    scp "$DB_FILE" "$SSH_USER@$IP:/tmp/slonk_arb.db"
+    scp "$DB_FILE" "$SSH_USER@$IP:~/slonk_arb.db"
     ssh "$SSH_USER@$IP" "
-        sudo cp /tmp/slonk_arb.db /var/lib/slonk-arb/slonk_arb.db
+        sudo cp ~/slonk_arb.db /var/lib/slonk-arb/slonk_arb.db
         sudo chown slonk:slonk /var/lib/slonk-arb/slonk_arb.db
-        rm /tmp/slonk_arb.db
+        rm ~/slonk_arb.db
     "
     echo "    Done."
 fi
