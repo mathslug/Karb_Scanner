@@ -31,7 +31,7 @@ Yes. At one point, Lorenzo Musetti's odds of winning the French Open were priced
 
 ## Live instance
 
-The review webapp is running at [slonkn.mathslug.com](https://slonkn.mathslug.com). You can browse pairs and evaluation results, but confirming/rejecting pairs requires authentication.
+The review webapp is running at [karb.mathslug.com](https://karb.mathslug.com). You can browse pairs and evaluation results, but confirming/rejecting pairs requires authentication.
 
 Currently scoped to tennis and hockey markets. The architecture supports any Kalshi sport category, with a `sub_sport` system that distinguishes pro from college leagues (e.g., NFL vs college football).
 

@@ -3,7 +3,7 @@
 # Usage: bash scripts/pull_prod.sh
 set -euo pipefail
 
-HOST="almalinux@slonkn.mathslug.com"
+HOST="almalinux@karb.mathslug.com"
 LOG_DIR="/var/log/slonk-arb"
 DATA_DIR="/var/lib/slonk-arb"
 

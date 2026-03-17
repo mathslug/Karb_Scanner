@@ -11,7 +11,7 @@
 #
 set -euo pipefail
 
-DOMAIN=slonkn.mathslug.com
+DOMAIN=karb.mathslug.com
 SSH_USER=almalinux
 SENTINEL=/var/lib/slonk-arb/.cloud-init-done
 DO_PROJECT=SlonkN

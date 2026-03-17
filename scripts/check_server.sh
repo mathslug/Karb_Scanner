@@ -3,7 +3,7 @@
 # Usage: bash scripts/check_server.sh
 set -euo pipefail
 
-HOST="almalinux@slonkn.mathslug.com"
+HOST="almalinux@karb.mathslug.com"
 
 echo "==> Deployed commit:"
 ssh "$HOST" "sudo git -C /opt/slonk-arb log --oneline -3"

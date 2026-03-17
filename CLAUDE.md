@@ -191,7 +191,7 @@ Uses the Kalshi public REST API at `https://api.elections.kalshi.com/trade-api/v
 
 ## Deployment
 
-Deployed to a single Digital Ocean droplet (AlmaLinux 10, s-1vcpu-512mb-10gb) at `slonkn.mathslug.com`.
+Deployed to a single Digital Ocean droplet (AlmaLinux 10, s-1vcpu-512mb-10gb) at `karb.mathslug.com`.
 
 ### Server layout
 
@@ -238,7 +238,7 @@ NOTIFY_EMAIL=...
 
 ### GitHub Actions secrets
 
-- `DROPLET_URL` -- server hostname (e.g. slonkn.mathslug.com)
+- `DROPLET_URL` -- server hostname (e.g. karb.mathslug.com)
 - `SSH_PRIVATE_KEY` -- deploy user's private key
 - `ANTHROPIC_KEY` -- Anthropic API key (written to `.env` on first deploy)
 - `SLONK_ADMIN_PASSWORD` -- webapp basic auth password (written to `.env` on first deploy)
