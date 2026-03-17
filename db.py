@@ -682,8 +682,8 @@ def get_pair_stats(conn: sqlite3.Connection) -> dict:
         """SELECT
             COUNT(*) AS total,
             SUM(CASE WHEN confidence NOT IN ('none','need_more_info') AND human_review IS NULL THEN 1 ELSE 0 END) AS unreviewed,
-            SUM(CASE WHEN human_review = 'confirmed' THEN 1 ELSE 0 END) AS confirmed,
-            SUM(CASE WHEN human_review = 'rejected' THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN human_review = 'confirmed' AND confidence NOT IN ('none','need_more_info') THEN 1 ELSE 0 END) AS confirmed,
+            SUM(CASE WHEN human_review = 'rejected' AND confidence NOT IN ('none','need_more_info') THEN 1 ELSE 0 END) AS rejected,
             SUM(CASE WHEN confidence = 'none' THEN 1 ELSE 0 END) AS no_relationship,
             SUM(CASE WHEN confidence = 'need_more_info' AND human_review IS NULL THEN 1 ELSE 0 END) AS need_more_info
         FROM candidate_pairs"""
