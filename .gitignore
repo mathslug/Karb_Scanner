@@ -16,6 +16,7 @@ wheels/
 *.db
 *.db-shm
 *.db-wal
+db_backups/*
 
 # Data files
 *.json
