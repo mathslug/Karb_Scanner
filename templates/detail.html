@@ -114,6 +114,7 @@
 
   {% if is_admin %}
   <form method="post" action="/pair/{{ pair.id }}/review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="grid">
       <button type="submit" name="decision" value="confirmed">Confirm</button>
       <button type="submit" name="decision" value="reversed" class="contrast">Reverse &amp; Confirm</button>

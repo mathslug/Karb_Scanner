@@ -5,6 +5,7 @@ import os
 from functools import wraps
 
 from flask import Flask, redirect, render_template, request, url_for, Response
+from flask_wtf.csrf import CSRFProtect
 
 import db as db_mod
 
@@ -15,6 +16,8 @@ ADMIN_PASSWORD = os.environ.get("SLONK_ADMIN_PASSWORD", "")
 def create_app(db_path: str = DB_PATH) -> Flask:
     app = Flask(__name__)
     app.config["DB_PATH"] = db_path
+    app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(32))
+    CSRFProtect(app)
 
     def get_conn():
         return db_mod.get_connection(app.config["DB_PATH"])

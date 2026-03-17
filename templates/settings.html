@@ -11,6 +11,7 @@
   </p>
   {% if is_admin %}
   <form method="post" action="/settings">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="buffer_bps">Buffer (basis points)</label>
     <input type="number" id="buffer_bps" name="buffer_bps" value="{{ settings.get('buffer_bps', '100') }}" min="0" step="1">
 
