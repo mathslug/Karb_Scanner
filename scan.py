@@ -126,10 +126,12 @@ def fetch_and_store_markets(category: str, conn, filter_tags: list[str] | None =
         time.sleep(0.2)  # rate limit between series
         batch = []
         for event in events:
-            # Derive sub_sport: use competition for Football, otherwise sport_tag
+            # Derive sub_sport from event competition metadata when the sport
+            # has meaningful sub-categories (e.g. Football -> Pro/College,
+            # Hockey -> NHL/College Hockey). Other sports fall back to sport_tag.
             competition = event.get("product_metadata", {}).get("competition", "")
-            if sport_tag == "Football" and competition:
-                sub_sport = competition  # e.g. "Pro Football", "College Football"
+            if sport_tag in ("Football", "Hockey", "Basketball", "Baseball") and competition:
+                sub_sport = competition
             else:
                 sub_sport = sport_tag
             for m in event.get("markets", []):
@@ -556,6 +558,7 @@ def main() -> None:
         for entity, entity_markets in groups.items():
             if any(
                 m.get("sub_sport", "").lower() in filter_lower
+                or m.get("sport_tag", "").lower() in filter_lower
                 for m in entity_markets
             ):
                 filtered_groups[entity] = entity_markets
