@@ -172,13 +172,15 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     if fk_state and fk_state[0]:
         conn.execute("PRAGMA foreign_keys=ON")
 
-    # Backfill none-confidence pairs that have NULL antecedent/consequent
-    conn.execute("""UPDATE candidate_pairs
-        SET antecedent_ticker = ticker_a, consequent_ticker = ticker_b
-        WHERE antecedent_ticker IS NULL""")
-    # Backfill sub_sport from sport_tag for existing rows
-    conn.execute("""UPDATE tickers SET sub_sport = sport_tag WHERE sub_sport = ''""")
-    conn.commit()
+    # Data backfills — tables may not exist yet on a fresh DB
+    try:
+        conn.execute("""UPDATE candidate_pairs
+            SET antecedent_ticker = ticker_a, consequent_ticker = ticker_b
+            WHERE antecedent_ticker IS NULL""")
+        conn.execute("""UPDATE tickers SET sub_sport = sport_tag WHERE sub_sport = ''""")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # tables don't exist yet, will be created by init_db
 
 
 def init_db(db_path: str) -> None:
