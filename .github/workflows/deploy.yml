@@ -20,6 +20,8 @@ jobs:
             cd /opt/slonk-arb
             git reset --hard origin/main
             git pull origin main
+            uv sync --extra dev
+            uv run pytest -x -q
             uv sync
             sudo cp /opt/slonk-arb/deploy/slonk-arb.cron /etc/cron.d/slonk-arb
             # Create .env from GitHub secrets if missing

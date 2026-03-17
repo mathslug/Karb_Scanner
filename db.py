@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS tickers (
     no_ask_dollars           TEXT,
     volume                   INTEGER NOT NULL DEFAULT 0,
     sport_tag                TEXT NOT NULL DEFAULT '',
+    sub_sport                TEXT NOT NULL DEFAULT '',
     first_seen               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     last_scanned             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     is_active                INTEGER NOT NULL DEFAULT 1
