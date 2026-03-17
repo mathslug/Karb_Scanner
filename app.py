@@ -56,9 +56,10 @@ def create_app(db_path: str = DB_PATH) -> Flask:
         return render_template("base.html", page="dashboard", stats=stats)
 
     def _filter_by_confidence(pairs, confidence):
-        if confidence and confidence in ("high", "medium", "low", "need_more_info"):
+        if confidence and confidence in ("high", "medium", "low", "need_more_info", "none"):
             return [p for p in pairs if p.get("confidence") == confidence]
-        return pairs
+        # Default "All" excludes none-confidence pairs
+        return [p for p in pairs if p.get("confidence") != "none"]
 
     @app.route("/review")
     def review():

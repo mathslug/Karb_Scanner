@@ -524,7 +524,7 @@ def get_pairs_for_review(conn: sqlite3.Connection, status: str) -> list[dict]:
     sorted by cost ascending then confidence descending.
     """
     if status == "unreviewed":
-        where = "cp.human_review IS NULL AND cp.confidence NOT IN ('none','need_more_info') AND cp.antecedent_ticker IS NOT NULL AND cp.consequent_ticker IS NOT NULL"
+        where = "cp.human_review IS NULL AND cp.confidence != 'need_more_info'"
     elif status == "need_more_info":
         where = "cp.human_review IS NULL AND cp.confidence = 'need_more_info'"
     elif status == "confirmed":
@@ -555,8 +555,8 @@ def get_pairs_for_review(conn: sqlite3.Connection, status: str) -> list[dict]:
             ant.expected_expiration_time AS antecedent_expiration,
             con.expected_expiration_time AS consequent_expiration
         FROM candidate_pairs cp
-        LEFT JOIN tickers ant ON ant.ticker = cp.antecedent_ticker
-        LEFT JOIN tickers con ON con.ticker = cp.consequent_ticker
+        LEFT JOIN tickers ant ON ant.ticker = COALESCE(cp.antecedent_ticker, cp.ticker_a)
+        LEFT JOIN tickers con ON con.ticker = COALESCE(cp.consequent_ticker, cp.ticker_b)
         WHERE {where}""",
     ).fetchall()
 
