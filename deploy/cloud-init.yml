@@ -110,6 +110,7 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable --now nginx
   - nginx -t && systemctl reload nginx
+  - systemctl enable --now certbot-renew.timer
   - systemctl enable slonk-arb
   - systemctl enable --now crond
 
