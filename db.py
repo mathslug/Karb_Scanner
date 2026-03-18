@@ -399,7 +399,10 @@ def _compute_yield(
     days = (settlement - date.today()).days
     if days <= 0:
         return None, None
-    ann_yield = (1.0 / cost) ** (365.0 / days) - 1.0
+    try:
+        ann_yield = (1.0 / cost) ** (365.0 / days) - 1.0
+    except OverflowError:
+        ann_yield = float("inf")
     return ann_yield, days
 
 

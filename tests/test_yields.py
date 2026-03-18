@@ -117,3 +117,11 @@ def test_compute_yield_none_expiration():
 
 def test_compute_yield_empty_expiration():
     assert _compute_yield(0.95, "") == (None, None)
+
+
+def test_compute_yield_overflow_returns_inf():
+    """Extremely small cost with few days to expiration should return inf, not crash."""
+    future = (date.today() + timedelta(days=1)).isoformat() + "Z"
+    ann_yield, days = _compute_yield(0.0001, future)
+    assert ann_yield == float("inf")
+    assert days == 1
