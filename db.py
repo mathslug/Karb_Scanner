@@ -318,11 +318,11 @@ def get_tickers_by_entity(conn: sqlite3.Connection, min_volume: int = 0) -> dict
         m = dict(r)
         groups.setdefault(m["yes_sub_title"], []).append(m)
 
-    # Only keep entities appearing in 2+ series
+    # Only keep entities appearing in 2+ events
     return {
         entity: markets
         for entity, markets in groups.items()
-        if len({m["series_ticker"] for m in markets}) >= 2
+        if len({m["event_ticker"] for m in markets}) >= 2
     }
 
 

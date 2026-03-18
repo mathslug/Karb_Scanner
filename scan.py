@@ -204,12 +204,11 @@ def filter_groups_by_sport(
 
 
 def generate_candidate_pairs(groups: dict[str, list[dict]]) -> list[tuple[dict, dict]]:
-    """Generate cross-series candidate pairs for each entity.
+    """Generate candidate pairs for each entity.
 
-    Only pairs markets from different series — same-series pairs are never
-    implication relationships. Skips pairs where both markets have a known
-    sport and the sports differ (cross-sport noise). Also skips entities
-    in the ENTITY_BLOCKLIST that never produce real implications.
+    Pairs all markets within an entity. Skips pairs where both markets have
+    a known sport and the sports differ (cross-sport noise). Also skips
+    entities in the ENTITY_BLOCKLIST that never produce real implications.
     """
     pairs = []
     filtered_count = 0
@@ -219,13 +218,12 @@ def generate_candidate_pairs(groups: dict[str, list[dict]]) -> list[tuple[dict, 
             blocklist_count += len(list(combinations(entity_markets, 2)))
             continue
         for a, b in combinations(entity_markets, 2):
-            if a["series_ticker"] != b["series_ticker"] and a["event_ticker"] != b["event_ticker"]:
-                sub_a = a.get("sub_sport") or a.get("sport_tag") or None
-                sub_b = b.get("sub_sport") or b.get("sport_tag") or None
-                if sub_a and sub_b and sub_a != sub_b:
-                    filtered_count += 1
-                    continue
-                pairs.append((a, b))
+            sub_a = a.get("sub_sport") or a.get("sport_tag") or None
+            sub_b = b.get("sub_sport") or b.get("sport_tag") or None
+            if sub_a and sub_b and sub_a != sub_b:
+                filtered_count += 1
+                continue
+            pairs.append((a, b))
     if blocklist_count:
         log.info("Skipped %d pairs from blocklisted entities", blocklist_count)
         print(f"  Skipped {blocklist_count} pairs from blocklisted entities")
