@@ -68,7 +68,9 @@ def create_app(db_path: str = DB_PATH) -> Flask:
     def review():
         conn = get_conn()
         pairs = db_mod.get_pairs_for_review(conn, "unreviewed")
+        need_info = db_mod.get_pairs_for_review(conn, "need_more_info")
         conn.close()
+        pairs = pairs + need_info
         conf = request.args.get("confidence")
         pairs = _filter_by_confidence(pairs, conf)
         return render_template("review.html", pairs=pairs, status="unreviewed", title="Unreviewed Pairs", confidence=conf)

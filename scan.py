@@ -80,14 +80,20 @@ def fetch_events_with_markets(series_ticker: str) -> list[dict]:
         }
         if cursor:
             params["cursor"] = cursor
-        resp = requests.get(f"{KALSHI_BASE}/events", params=params, timeout=15)
-        resp.raise_for_status()
+        for attempt in range(3):
+            resp = requests.get(f"{KALSHI_BASE}/events", params=params, timeout=15)
+            if resp.status_code == 429 and attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            resp.raise_for_status()
+            break
         data = resp.json()
         batch = data.get("events", [])
         events.extend(batch)
         cursor = data.get("cursor")
         if not cursor or not batch:
             break
+        time.sleep(0.2)
     return events
 
 
