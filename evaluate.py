@@ -43,6 +43,14 @@ def main() -> None:
         help="confirmed = human-approved pairs, high = high-confidence unreviewed (default: confirmed)",
     )
     parser.add_argument(
+        "--hot", action="store_true",
+        help="only evaluate pairs whose latest tob_cost is near parity (fast frequent runs)",
+    )
+    parser.add_argument(
+        "--hot-threshold", type=float, default=1.03,
+        help="tob_cost threshold for --hot (default: 1.03)",
+    )
+    parser.add_argument(
         "--log-file", default="evaluate.log",
         help="log file path (default: evaluate.log)",
     )
@@ -56,14 +64,22 @@ def main() -> None:
 
     conn = db_mod.get_connection(args.db)
     db_status = "confirmed" if args.mode == "confirmed" else "high_unreviewed"
-    pairs = db_mod.get_pairs_for_review(conn, db_status)
+    # exclude_expired: once a pair's antecedent expiration passes it can never
+    # be a trade again — without this, resolved pairs get re-evaluated forever.
+    pairs = db_mod.get_pairs_for_review(conn, db_status, exclude_expired=True)
+
+    if args.hot:
+        hot_ids = db_mod.get_hot_pair_ids(conn, args.hot_threshold)
+        pairs = [p for p in pairs if p["id"] in hot_ids]
 
     if not pairs:
-        print(f"No {args.mode} pairs to evaluate.")
+        print(f"No {'hot ' if args.hot else ''}{args.mode} pairs to evaluate.")
         conn.close()
         sys.exit(0)
 
     label = "human-confirmed" if args.mode == "confirmed" else "high-confidence unreviewed"
+    if args.hot:
+        label = f"hot (tob<{args.hot_threshold}) {label}"
     print(f"Evaluating {len(pairs)} {label} pairs (max_n={args.max_n})...\n")
 
     results = []

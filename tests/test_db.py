@@ -194,6 +194,60 @@ def test_get_pairs_rejected(conn):
     assert len(db.get_pairs_for_review(conn, "rejected")) == 1
 
 
+# ── exclude_expired ──────────────────────────────────────────────────────────
+
+
+def _iso(days_from_now):
+    from datetime import datetime, timedelta, timezone
+    dt = datetime.now(timezone.utc) + timedelta(days=days_from_now)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _seed_pair_with_expiration(conn, ticker_a, ticker_b, expiration,
+                               confidence="high", human_review=None):
+    """Seed a pair whose antecedent ticker has the given expiration."""
+    db.upsert_tickers(conn, [
+        _make_market(ticker=ticker_a, series_ticker="S1",
+                     expected_expiration_time=expiration),
+        _make_market(ticker=ticker_b, series_ticker="S2",
+                     expected_expiration_time=_iso(365)),
+    ])
+    db.bulk_upsert_pair_results(conn, [{
+        "ticker_a": ticker_a, "ticker_b": ticker_b,
+        "antecedent_ticker": ticker_a, "consequent_ticker": ticker_b,
+        "confidence": confidence, "reasoning": "test",
+    }], "test-model")
+    pair_id = conn.execute(
+        "SELECT id FROM candidate_pairs ORDER BY id DESC LIMIT 1"
+    ).fetchone()["id"]
+    if human_review:
+        db.set_review(conn, pair_id, human_review)
+    return pair_id
+
+
+def test_exclude_expired_drops_past_antecedent(conn):
+    _seed_pair_with_expiration(conn, "OLD-A", "OLD-B", _iso(-5))
+    _seed_pair_with_expiration(conn, "NEW-A", "NEW-B", _iso(30))
+    live = db.get_pairs_for_review(conn, "unreviewed", exclude_expired=True)
+    assert [p["ticker_a"] for p in live] == [db._sorted_pair("NEW-A", "NEW-B")[0]]
+    # Default keeps both
+    assert len(db.get_pairs_for_review(conn, "unreviewed")) == 2
+
+
+def test_exclude_expired_applies_to_confirmed_and_high(conn):
+    _seed_pair_with_expiration(conn, "C-A", "C-B", _iso(-5), human_review="confirmed")
+    assert db.get_pairs_for_review(conn, "confirmed", exclude_expired=True) == []
+    assert len(db.get_pairs_for_review(conn, "confirmed")) == 1
+
+    _seed_pair_with_expiration(conn, "H-A", "H-B", _iso(-5), confidence="high")
+    assert db.get_pairs_for_review(conn, "high_unreviewed", exclude_expired=True) == []
+
+
+def test_exclude_expired_keeps_unknown_expiration(conn):
+    _seed_pair_with_expiration(conn, "E-A", "E-B", "")
+    assert len(db.get_pairs_for_review(conn, "unreviewed", exclude_expired=True)) == 1
+
+
 # ── set_review + reverse_and_confirm ─────────────────────────────────────────
 
 
@@ -226,12 +280,40 @@ def test_reverse_and_confirm(conn):
 
 
 def test_get_pair_stats(conn):
-    _seed_pair(conn, "A", "B", "high")
-    _seed_pair(conn, "C", "D", "none")
+    _seed_pair_with_expiration(conn, "A", "B", _iso(30), confidence="high")
+    _seed_pair_with_expiration(conn, "C", "D", _iso(30), confidence="none")
     stats = db.get_pair_stats(conn)
     assert stats["total"] == 2
     assert stats["unreviewed"] == 1  # 'none' excluded
     assert stats["no_relationship"] == 1
+    assert stats["expired_unreviewed"] == 0
+
+
+def test_get_hot_pair_ids_uses_latest_evaluation(conn):
+    pid = _seed_pair_with_expiration(conn, "A", "B", _iso(30), human_review="confirmed")
+    # Older eval near parity, latest eval far from parity -> not hot
+    db.insert_trade_evaluation(conn, {"pair_id": pid, "recommendation": "pass", "tob_cost": 1.01})
+    conn.execute("UPDATE trade_evaluations SET evaluated_at = '2020-01-01T00:00:00Z'")
+    conn.commit()
+    db.insert_trade_evaluation(conn, {"pair_id": pid, "recommendation": "pass", "tob_cost": 1.20})
+    assert db.get_hot_pair_ids(conn, 1.03) == set()
+    # Latest eval near parity -> hot
+    db.insert_trade_evaluation(conn, {"pair_id": pid, "recommendation": "pass", "tob_cost": 1.005})
+    assert db.get_hot_pair_ids(conn, 1.03) == {pid}
+
+
+def test_get_hot_pair_ids_ignores_null_tob(conn):
+    pid = _seed_pair_with_expiration(conn, "A", "B", _iso(30), human_review="confirmed")
+    db.insert_trade_evaluation(conn, {"pair_id": pid, "recommendation": "pass"})
+    assert db.get_hot_pair_ids(conn, 1.03) == set()
+
+
+def test_get_pair_stats_expired_excluded_from_unreviewed(conn):
+    _seed_pair_with_expiration(conn, "A", "B", _iso(-5), confidence="high")
+    _seed_pair_with_expiration(conn, "C", "D", _iso(30), confidence="high")
+    stats = db.get_pair_stats(conn)
+    assert stats["unreviewed"] == 1  # matches the review queue
+    assert stats["expired_unreviewed"] == 1
 
 
 # ── settings ─────────────────────────────────────────────────────────────────

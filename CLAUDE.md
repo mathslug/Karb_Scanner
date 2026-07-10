@@ -4,13 +4,17 @@ Kalshi cross-market arbitrage checker and scanner for binary prediction markets.
 
 ## Architecture
 
-Eight code files + templates + deploy scripts:
+Ten code files + templates + deploy scripts:
 
 - **`kalshi.py`** -- shared Kalshi API helpers, fee model, and orderbook utilities. Contains `KALSHI_BASE`, `TAKER_FEE_COEFF`, `fetch_market()`, `fetch_orderbook()`, `taker_fee()`, `walk_book()`, and the `Fill`, `LegResult`, `Side` types.
 
 - **`main.py`** -- evaluates a known arb pair. Has `evaluate_arb(ticker_a, side_a, ticker_b, side_b, n, settlement_date, discount_rate)` which walks both orderbooks, computes all-in cost with fees, and returns an `ArbResult` (key field: `npv`). CLI wrapper hardcodes the Musetti FO/GS tennis tickers.
 
-- **`scan.py`** -- discovers arb pairs automatically. Fetches sports markets from Kalshi, groups by entity (`yes_sub_title`), generates cross-series candidate pairs, screens via Claude Sonnet for logical implication, persists to SQLite DB, prints terminal summary.
+- **`scan.py`** -- discovers arb pairs automatically. Fetches sports markets from Kalshi, groups by entity (`yes_sub_title`), generates candidate pairs within each entity, screens via an LLM for logical implication, persists to SQLite DB, prints terminal summary. LLM backend: if `LLM_BASE_URL` is set, uses that OpenAI-compatible endpoint (production: DigitalOcean dedicated inference running `openai/gpt-oss-120b`); otherwise calls the Anthropic API directly.
+
+- **`gpu_droplet.py`** -- default LLM backend orchestrator: ephemeral MI300X GPU droplet ($1.99/hr, atl1) running Ollama with `gpt-oss:120b` (`create`/`destroy`/`status`/`snapshot`). `create` prefers the `slonk-llm-snapshot` snapshot (model weights baked in, ~5 min boot; without it, first boot installs Ollama + pulls the model via cloud-init, ~20-40 min), maintains a tag-scoped cloud firewall admitting port 11434 only from the scanner droplet + the creating machine (Ollama has no auth), waits for a warm-up inference, and prints `export LLM_BASE_URL/LLM_API_KEY/LLM_MODEL` lines for the shell wrapper to eval. `destroy` deletes by tag. Requires `DIGITALOCEAN_TOKEN`.
+
+- **`dedicated.py`** -- alternative LLM backend orchestrator using DigitalOcean dedicated inference (managed; `openai/gpt-oss-120b` on MI300X, $2.59/hr, atl1). Same `create`/`destroy`/`status` contract and export lines as `gpu_droplet.py`. Blocked until the account's dedicated-inference quota is granted. Requires `DIGITALOCEAN_TOKEN`.
 
 - **`db.py`** -- pure SQLite persistence functions. Every function takes `conn` as first arg — no global state. Tables: `tickers`, `prices`, `candidate_pairs`, `trade_evaluations`, `treasury_yields`, `settings`. Designed for REPL use: `import db; conn = db.get_connection("slonk_arb.db")`.
 
@@ -22,9 +26,9 @@ Eight code files + templates + deploy scripts:
 
 - **`notify.py`** -- sends email notifications for BUY recommendations via Gmail SMTP. Called by `evaluate.py`.
 
-- **`templates/`** -- Jinja2 templates (`base.html`, `review.html`, `detail.html`, `trades.html`, `signals.html`, `settings.html`) using Pico CSS.
+- **`templates/`** -- Jinja2 templates (`base.html`, `review.html`, `detail.html`, `trades.html`, `evaluations.html`, `settings.html`) using Pico CSS.
 
-- **`deploy/`** -- server provisioning (`cloud-init.yml`, `rebuild.sh`), cron wrapper (`run.sh`), and GitHub Actions workflow.
+- **`deploy/`** -- server provisioning (`cloud-init.yml`, `rebuild.sh`), cron wrappers (`run.sh`, `run_scan_gpu.sh`), and GitHub Actions workflow. `run_scan_gpu.sh` provisions the LLM backend via the orchestrator named in `SLONK_LLM_ORCH` (default `gpu_droplet.py`), runs the scan against it with the orchestrator-provided `LLM_MODEL`, and always destroys it (trap on EXIT).
 
 - **`scripts/`** -- helper scripts for operations (`pull_prod.sh`, `db_summary.py`, `check_server.sh`, `log_errors.sh`, `pair_details.py`).
 
@@ -74,8 +78,8 @@ SLONK_DB=my.db uv run app.py                       # custom DB path
 
 ### CLI args -- scan.py
 - `--filter` / `-f` -- comma-separated sport/competition names to filter (e.g. "tennis", "tennis,hockey", "tennis,pro football"). Values map to `sub_sport` for local entity filtering; special values like "pro football" and "college football" are translated to the correct Kalshi API tag ("Football") for fetching.
-- `--model` -- Anthropic model name (default: `claude-sonnet-4-6`)
-- `--min-volume` -- exclude markets below this volume (default: 0)
+- `--model` -- LLM model name (default: `claude-sonnet-4-6`; production cron passes the orchestrator-provided `$LLM_MODEL`, e.g. `gpt-oss:120b` for Ollama)
+- `--min-volume` -- exclude markets below this volume (default: 200)
 - `--batch-size` -- pairs per LLM call (default: 12)
 - `--category` -- Kalshi category (default: Sports)
 - `--db` -- SQLite database path (default: slonk_arb.db)
@@ -88,6 +92,7 @@ SLONK_DB=my.db uv run app.py                       # custom DB path
 - `--db` -- SQLite database path (default: slonk_arb.db)
 - `--max-n` -- max contracts to search for optimal fill (default: 500)
 - `--mode` -- `confirmed` (human-approved, default) or `high` (high-confidence unreviewed)
+- `--hot` -- only evaluate pairs whose latest `tob_cost` is below `--hot-threshold` (default 1.03); used by the hourly cron tier to re-check near-parity pairs cheaply
 - `--log-file` -- log file path (default: evaluate.log)
 
 ## Scanner data flow
@@ -96,32 +101,40 @@ SLONK_DB=my.db uv run app.py                       # custom DB path
 Fetch series for category (filtered by API tags if --filter) -> Fetch events + nested markets per series
   -> Extract minimal market representations + sport_tag from series tags + sub_sport from event product_metadata
   -> Upsert tickers into SQLite DB + deactivate missing tickers
-  -> Group markets by entity (yes_sub_title) from DB
+  -> Group markets by entity (yes_sub_title) from DB (entities spanning 2+ events)
   -> Apply sub_sport filter + min-volume at entity/pair level
-  -> Generate cross-series candidate pairs per entity (reject cross-sub_sport pairs)
+  -> Generate candidate pairs per entity (reject cross-sub_sport pairs + blocklisted/numeric entities)
   -> Filter out already-screened pairs (unless --rescan)
-  -> LLM screens each pair for logical implication (A YES -> B YES?)
+  -> Rule screener decides deterministic pairs for free (finish-position lattices)
+  -> LLM screens each remaining pair for logical implication (A YES -> B YES?)
   -> Store ALL results in DB (including "none" and "need_more_info" confidence)
   -> Print terminal summary
 ```
 
 ### Pre-filtering strategy
 
-Implication relationships almost always involve the same entity: "Alcaraz wins FO" -> "Alcaraz wins a GS". Grouping by `yes_sub_title` then only pairing across different series is a near-perfect pre-filter that reduces O(n^2) to ~50-200 candidates. Cross-sport pairs (different `sub_sport`) are also rejected. `sub_sport` is derived from event `product_metadata.competition` for Football (giving "Pro Football" vs "College Football"), otherwise falls back to `sport_tag` from the series `tags` field.
+Implication relationships almost always involve the same entity: "Alcaraz wins FO" -> "Alcaraz wins a GS". Grouping by `yes_sub_title` (keeping only entities that appear in 2+ events) is a near-perfect pre-filter that reduces O(n^2) to ~50-200 candidates. All markets within an entity are paired, including same-series pairs. Cross-sport pairs (different `sub_sport`) and blocklisted entities (e.g. "Tie", "Yes") are rejected. `sub_sport` is derived from event `product_metadata.competition` for Football (giving "Pro Football" vs "College Football"), otherwise falls back to `sport_tag` from the series `tags` field.
+
+### Rule-based screening
+
+Before any LLM call, `rule_screen_pairs()` decides pairs whose answer is deterministic from series tickers (~60% of historical volume, ~85% of golf): finish-position lattices (`KXPGATOUR ⊂ KXPGATOP5 ⊂ KXPGATOP10 ⊂ KXPGATOP20 ⊂ KXPGAMAKECUT`, the `KXPGAR1*` round-1 lattice, and LIV equivalents) → `high` with the narrower market as antecedent when same tournament; `none` for cross-tournament or cross-lattice (round vs final) combinations. Results are stored with `llm_model = "rule-screener-v1"`. Everything else — season aggregates (`KXPGAMAJORWIN`), `KXPGAR2LEAD` (cut-timing domain knowledge), tennis/hockey structures — defers to the LLM. Validated against 5,451 LLM-screened pairs: 98.5% agreement, zero direction mismatches; all 82 disagreements were LLM errors on one tournament (Valspar), not rule errors.
 
 ### LLM screening
 
-Uses Claude Sonnet via the Anthropic API. The prompt requests `ticker_a`/`ticker_b` echo-back fields so results are matched to input pairs by ticker rather than array index — prevents silent data corruption if the LLM skips, reorders, or merges results.
+Two backends, selected by env var: without `LLM_BASE_URL` (production default), scan.py calls the Anthropic API directly (requires `ANTHROPIC_API_KEY`). With `LLM_BASE_URL` set, it POSTs to `{LLM_BASE_URL}/v1/chat/completions` (OpenAI-compatible; Bearer auth via `LLM_API_KEY`) — the on-standby GPU path: an ephemeral MI300X droplet running Ollama `gpt-oss:120b` (see `gpu_droplet.py`; `dedicated.py` is the managed alternative), billed per GPU-hour to the DO account. Both GPU orchestrators are currently blocked on DO account quotas.
+
+The prompt requests `ticker_a`/`ticker_b` echo-back fields so results are matched to input pairs by ticker rather than array index — prevents silent data corruption if the LLM skips, reorders, or merges results. A failed batch (API error, malformed JSON) is logged and skipped; its pairs stay unscreened and are retried on the next run.
 
 ## Database
 
-SQLite database (`slonk_arb.db` by default) with five tables:
+SQLite database (`slonk_arb.db` by default) with six tables:
 
 - **`tickers`** -- all market info fetched from Kalshi (ticker, series, event, title, prices, volume, sport_tag, sub_sport, timestamps). Primary key: `ticker`. Price columns are the "latest" cache, overwritten each scan. `sport_tag` stores the first tag from the series' `tags` array (e.g., "Tennis"). `sub_sport` is a derived field: for Football series, uses `event.product_metadata.competition` (e.g., "Pro Football", "College Football"); for all other sports, equals `sport_tag`.
-- **`prices`** -- append-only price history. One row per ticker per scan with `last_price`, `yes_ask`, `no_ask`, and `recorded_at` timestamp. Populated by `record_prices()` during each scan.
-- **`candidate_pairs`** -- LLM screening results with `ticker_a`/`ticker_b` (always stored in sorted order), `antecedent_ticker`/`consequent_ticker`, confidence (`high`/`medium`/`low`/`need_more_info`/`none`), reasoning, and `human_review` (confirmed/rejected/NULL).
+- **`prices`** -- append-only price history. One row per ticker per scan with `last_price`, `yes_ask`, `no_ask`, and `recorded_at` timestamp. Populated by `record_prices()` during each scan and when `evaluate.py` fetches pair orderbooks.
+- **`candidate_pairs`** -- screening results with `ticker_a`/`ticker_b` (always stored in sorted order), `antecedent_ticker`/`consequent_ticker`, confidence (`high`/`medium`/`low`/`need_more_info`/`none`), reasoning, and `human_review` (confirmed/rejected/NULL). `llm_model` records the screener: an Anthropic/OpenAI model name, or `rule-screener-v1` for deterministic lattice pairs.
 - **`trade_evaluations`** -- append-only evaluation results per pair (orderbook snapshots, yields, costs, recommendation).
 - **`treasury_yields`** -- daily Treasury CMT yield curve data for discount rate calculations.
+- **`settings`** -- key/value app settings (`buffer_bps`, `borrow_rate_bps`), seeded by `get_connection()` and editable via the webapp settings page.
 
 ### `db.py` key functions
 
@@ -131,11 +144,11 @@ All take `conn: sqlite3.Connection` as first arg:
 - `get_connection(db_path)` -- REPL helper (sets WAL, foreign keys, Row factory)
 - `upsert_tickers(conn, markets)` -- insert/update from fetched dicts
 - `record_prices(conn, markets)` -- append price snapshots to history table
-- `get_tickers_by_entity(conn)` -- group active tickers by entity (2+ series)
+- `get_tickers_by_entity(conn, min_volume)` -- group active tickers by entity (2+ events)
 - `get_screened_pair_keys(conn)` -- set of already-evaluated pair keys
 - `bulk_upsert_pair_results(conn, results, model)` -- store LLM results
 - `deactivate_missing_tickers(conn, active_tickers)` -- mark disappeared tickers inactive
-- `get_pairs_for_review(conn, status)` -- fetch pairs for review UI (`unreviewed`/`confirmed`/`rejected`/`need_more_info`)
+- `get_pairs_for_review(conn, status, exclude_expired=False)` -- fetch pairs for review UI (`unreviewed`/`confirmed`/`rejected`/`need_more_info`/`high_unreviewed`); `exclude_expired=True` drops pairs whose antecedent `expected_expiration_time` has passed (used by the review queue and evaluate.py so resolved pairs retire instead of being shown/evaluated forever; pairs with unknown expiration are kept)
 - `get_pair_detail(conn, pair_id)` -- full info for a single pair
 - `set_review(conn, pair_id, decision)` -- set human review
 
@@ -146,13 +159,15 @@ Flask app (`app.py`) on port 5001 with routes:
 | Route | Purpose |
 |-------|---------|
 | `/` | Dashboard with pair counts |
-| `/review` | Unreviewed pairs table (filterable by confidence) |
-| `/reviewed` | Confirmed + rejected pairs |
+| `/review` | Unreviewed pairs table (filterable by confidence; expired pairs hidden) |
+| `/reviewed` | Confirmed + rejected pairs (history; includes expired) |
 | `/pair/<id>` | Pair detail with confirm/reject buttons |
-| `/trades` | Trade evaluations history |
-| `/settings` | App settings |
+| `/trades` | Latest BUY recommendations per pair |
+| `/evaluations` | Recent evaluations stream (`?days=N`) |
+| `/settings` | Yield benchmark settings + Treasury curve |
 | `/login` | Authentication |
-| `POST /pair/<id>/review` | Submit review decision |
+| `POST /pair/<id>/review` | Submit review decision (confirm/reject/reverse) |
+| `POST /settings` | Update hurdle rate settings |
 
 Uses Pico CSS (CDN, classless). Kalshi links: `https://kalshi.com/markets/<series_ticker_lower>/<event_ticker_lower>` (Kalshi redirects to include the slug).
 
@@ -203,7 +218,7 @@ Deployed to a single Digital Ocean droplet (AlmaLinux 10, s-1vcpu-512mb-10gb) at
 
 ### Stack
 
-- **nginx** -- reverse proxy with basic auth + Let's Encrypt SSL
+- **nginx** -- reverse proxy + Let's Encrypt SSL (admin auth is handled in the app via `SLONK_ADMIN_PASSWORD`)
 - **gunicorn** -- WSGI server via systemd (`slonk-arb.service`)
 - **cron** -- scheduled jobs via `/etc/cron.d/slonk-arb`
 - **Gmail SMTP** -- email notifications for BUY signals
@@ -220,8 +235,9 @@ Deployed to a single Digital Ocean droplet (AlmaLinux 10, s-1vcpu-512mb-10gb) at
 | Time ET | UTC | Job |
 |---------|-----|-----|
 | 3:30 AM | 07:30 | `scan.py --category Sports --max-pairs 0` -- fetch all sports tickers into DB (no LLM) |
-| 4:00 AM | 08:00 | `fetch_yields.py` + `scan.py --from-db --filter "tennis,hockey,golf" --min-volume 200` + `evaluate.py` + `evaluate.py --mode high` (chained) |
-| 4:00 PM | 20:00 | `evaluate.py` + `evaluate.py --mode high` -- midday re-evaluation against fresh orderbooks |
+| 4:00 AM | 08:00 | `fetch_yields.py` + `scan.py --from-db --filter "tennis,hockey,golf" --min-volume 200` (rule screener + Anthropic LLM) + `evaluate.py` + `evaluate.py --mode high` (chained) |
+| 11 AM, 4 PM | 15:00, 20:00 | `evaluate.py` + `evaluate.py --mode high` -- full re-evaluation sweeps against fresh orderbooks |
+| :30 hourly | :30 hourly | `evaluate.py --hot` (+ `--mode high`) -- re-check near-parity pairs only (latest tob_cost < 1.03) |
 | Sun 3 AM | Sun 7:00 | DB backup to `/var/lib/slonk-arb/backups/` |
 
 ### Email notifications
@@ -231,12 +247,16 @@ Deployed to a single Digital Ocean droplet (AlmaLinux 10, s-1vcpu-512mb-10gb) at
 ### Environment variables (`.env`)
 
 ```
-ANTHROPIC_API_KEY=...
+ANTHROPIC_API_KEY=...       # only needed for the direct-Anthropic LLM backend
+DIGITALOCEAN_TOKEN=...      # gpu_droplet.py/dedicated.py: droplet, firewall, tag, ssh_key, dedicated-inference, vpc scopes
+SLONK_ADMIN_PASSWORD=...
 SMTP_USER=...
 SMTP_PASSWORD=...
 NOTIFY_EMAIL=...
 FLASK_SECRET_KEY=...
 ```
+
+`LLM_BASE_URL` / `LLM_API_KEY` are not stored in `.env`; `run_scan_gpu.sh` gets them per-run from `dedicated.py create`.
 
 ### GitHub Actions secrets
 

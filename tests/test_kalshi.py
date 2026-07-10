@@ -38,6 +38,13 @@ def test_taker_fee_zero_contracts():
     assert taker_fee(0, 0.50) == 0.0
 
 
+def test_taker_fee_exact_cent_no_float_inflation():
+    # 0.07 * 100 * 0.25 = exactly $1.75; float noise must not ceil it to $1.76
+    assert taker_fee(100, 0.50) == 1.75
+    # 0.07 * 4 * 0.25 = exactly $0.07
+    assert taker_fee(4, 0.50) == 0.07
+
+
 def test_taker_fee_single_contract():
     # P=0.50: ceil(0.07 * 1 * 0.25 * 100) / 100 = ceil(1.75)/100 = 0.02
     assert taker_fee(1, 0.50) == 0.02

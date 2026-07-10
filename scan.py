@@ -13,10 +13,12 @@ review via the companion Flask webapp (app.py).
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from itertools import combinations
 
+import anthropic
 import requests
 from dotenv import load_dotenv
 
@@ -214,13 +216,15 @@ def generate_candidate_pairs(groups: dict[str, list[dict]]) -> list[tuple[dict, 
 
     Pairs all markets within an entity. Skips pairs where both markets have
     a known sport and the sports differ (cross-sport noise). Also skips
-    entities in the ENTITY_BLOCKLIST that never produce real implications.
+    entities in the ENTITY_BLOCKLIST and purely numeric entities (e.g. game
+    totals thresholds like "6"), which pair independent games, never real
+    implications.
     """
     pairs = []
     filtered_count = 0
     blocklist_count = 0
     for entity, entity_markets in groups.items():
-        if entity in ENTITY_BLOCKLIST:
+        if entity in ENTITY_BLOCKLIST or entity.replace(".", "").isdigit():
             blocklist_count += len(list(combinations(entity_markets, 2)))
             continue
         for a, b in combinations(entity_markets, 2):
@@ -237,6 +241,81 @@ def generate_candidate_pairs(groups: dict[str, list[dict]]) -> list[tuple[dict, 
         log.info("Filtered %d cross-sport pairs", filtered_count)
         print(f"  Filtered {filtered_count} cross-sport pairs")
     return pairs
+
+
+# ── Rule-based screening ─────────────────────────────────────────────────────
+#
+# Finish-position lattices are deterministic from the series tickers: for the
+# same player in the same tournament, winning implies top-5 implies top-10
+# implies top-20 implies making the cut. Screening these with an LLM is pure
+# token waste (~85% of historical LLM volume; verified against 5,200+
+# LLM-screened PGA pairs with full agreement on the encoded families).
+# Anything not covered falls through to the LLM — including judgment
+# families like KXPGAMAJORWIN and KXPGAR2LEAD (round-2 leader DOES imply
+# making the cut, but that's cut-timing domain knowledge we leave to the LLM).
+
+RULE_SCREENER_MODEL = "rule-screener-v1"
+
+# Ordered narrow -> broad: entry i implies entry j (i < j) for the same
+# player in the same tournament.
+_LATTICES = [
+    ["KXPGATOUR", "KXPGATOP5", "KXPGATOP10", "KXPGATOP20", "KXPGAMAKECUT"],
+    ["KXPGAR1LEAD", "KXPGAR1TOP5", "KXPGAR1TOP10"],
+    ["KXLIVTOUR", "KXLIVTOP5", "KXLIVTOP10"],
+]
+_LATTICE_RANK = {
+    series: (fam_idx, rank)
+    for fam_idx, fam in enumerate(_LATTICES)
+    for rank, series in enumerate(fam)
+}
+
+
+def _tournament_suffix(event_ticker: str) -> str:
+    """Event tickers are SERIES-TOURNAMENT (e.g. KXPGATOP5-MAST26)."""
+    return event_ticker.split("-", 1)[1] if "-" in event_ticker else ""
+
+
+def rule_screen_pair(a: dict, b: dict) -> dict | None:
+    """Screen a pair by lattice rules. Returns a result dict (same shape as
+    an LLM result) when the rules decide it, or None to defer to the LLM."""
+    ra = _LATTICE_RANK.get(a["series_ticker"])
+    rb = _LATTICE_RANK.get(b["series_ticker"])
+    if ra is None or rb is None:
+        return None
+    ta, tb = _tournament_suffix(a["event_ticker"]), _tournament_suffix(b["event_ticker"])
+    if not ta or not tb:
+        return None
+    base = {"ticker_a": a["ticker"], "ticker_b": b["ticker"]}
+    if ta != tb:
+        # Finish positions in different tournaments never imply each other.
+        return {**base, "antecedent_ticker": None, "consequent_ticker": None,
+                "confidence": "none",
+                "reasoning": "rule: finish-position markets in different tournaments"}
+    if ra[0] != rb[0]:
+        # Same tournament, different lattice (e.g. round-1 position vs final
+        # result): neither direction is a logical necessity.
+        return {**base, "antecedent_ticker": None, "consequent_ticker": None,
+                "confidence": "none",
+                "reasoning": "rule: round-position and final-result markets don't imply each other"}
+    if ra[1] == rb[1]:
+        return None  # same series + tournament: shouldn't occur, defer
+    ant, con = (a, b) if ra[1] < rb[1] else (b, a)
+    return {**base, "antecedent_ticker": ant["ticker"], "consequent_ticker": con["ticker"],
+            "confidence": "high",
+            "reasoning": (f"rule: {ant['series_ticker']} is a strict subset of "
+                          f"{con['series_ticker']} for the same player and tournament")}
+
+
+def rule_screen_pairs(pairs: list[tuple[dict, dict]]) -> tuple[list[dict], list[tuple[dict, dict]]]:
+    """Split pairs into (rule_results, remaining_for_llm)."""
+    results, remaining = [], []
+    for a, b in pairs:
+        r = rule_screen_pair(a, b)
+        if r is not None:
+            results.append(r)
+        else:
+            remaining.append((a, b))
+    return results, remaining
 
 
 # ── LLM screening ───────────────────────────────────────────────────────────
@@ -305,7 +384,6 @@ def format_pair_for_llm(idx: int, a: dict, b: dict) -> str:
 
 def _call_anthropic(prompt: str, model: str) -> str:
     """Call Anthropic Messages API."""
-    import anthropic
     client = anthropic.Anthropic()
     response = client.messages.create(
         model=model,
@@ -315,21 +393,70 @@ def _call_anthropic(prompt: str, model: str) -> str:
     return response.content[0].text
 
 
+def _call_openai_compat(prompt: str, model: str, base_url: str) -> str:
+    """Call an OpenAI-compatible chat completions endpoint.
+
+    Used for DigitalOcean dedicated inference (and anything else that speaks
+    /v1/chat/completions). Auth via LLM_API_KEY as a Bearer token.
+    """
+    resp = requests.post(
+        f"{base_url.rstrip('/')}/v1/chat/completions",
+        headers={"Authorization": f"Bearer {os.environ.get('LLM_API_KEY', '')}"},
+        json={
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            # Reasoning models spend completion tokens on thinking before the
+            # final JSON, so leave generous headroom.
+            "max_tokens": 8192,
+        },
+        timeout=300,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"].get("content") or ""
+
+
+def _call_llm(prompt: str, model: str) -> str:
+    """Route to the configured LLM backend.
+
+    If LLM_BASE_URL is set, use the OpenAI-compatible endpoint there;
+    otherwise call the Anthropic API directly.
+    """
+    base_url = os.environ.get("LLM_BASE_URL")
+    if base_url:
+        return _call_openai_compat(prompt, model, base_url)
+    return _call_anthropic(prompt, model)
+
+
 def _extract_json(text: str) -> list[dict]:
-    """Extract a JSON array from LLM output, stripping markdown fencing."""
+    """Extract a JSON array from LLM output, stripping markdown fencing.
+
+    Raises ValueError (which json.JSONDecodeError subclasses) if the output
+    is not JSON or not a recognizable list-of-objects shape.
+    """
     text = text.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1]
         if text.endswith("```"):
             text = text[: text.rfind("```")]
         text = text.strip()
-    parsed = json.loads(text)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        # Some models wrap the JSON in prose; retry on the outermost {...} span.
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        parsed = json.loads(text[start : end + 1])
     if isinstance(parsed, dict):
         for key in ("results", "pairs", "data"):
             if isinstance(parsed.get(key), list):
-                return parsed[key]
-        if "antecedent_ticker" in parsed:
-            return [parsed]
+                parsed = parsed[key]
+                break
+        else:
+            if "antecedent_ticker" in parsed:
+                parsed = [parsed]
+    if not isinstance(parsed, list) or not all(isinstance(r, dict) for r in parsed):
+        raise ValueError("unrecognized LLM response shape")
     return parsed
 
 
@@ -361,7 +488,7 @@ def screen_pairs_with_llm(
 
         results_start = len(results)
         try:
-            text = _call_anthropic(prompt, model)
+            text = _call_llm(prompt, model)
             log.debug("Batch %d raw response:\n%s", batch_num, text)
             batch_results = _extract_json(text)
 
@@ -438,7 +565,7 @@ def screen_pairs_with_llm(
             if conn is not None:
                 batch_stored = results[results_start:]
                 db_mod.bulk_upsert_pair_results(conn, batch_stored, model)
-        except (json.JSONDecodeError, requests.RequestException, KeyError) as e:
+        except (ValueError, KeyError, requests.RequestException, anthropic.AnthropicError) as e:
             log.warning("Batch %d failed: %s", batch_num, e)
             print(f"    Warning: batch {batch_num} failed: {e}")
             continue
@@ -607,6 +734,21 @@ def main() -> None:
         print("No new pairs to screen.")
         sys.exit(0)
 
+    # ── Rule-based screening (free) before the LLM ───────────────────────
+    rule_results, pairs = rule_screen_pairs(pairs)
+    if rule_results:
+        db_mod.bulk_upsert_pair_results(conn, rule_results, RULE_SCREENER_MODEL)
+        n_high = sum(1 for r in rule_results if r["confidence"] == "high")
+        print(f"  Rule-screened {len(rule_results)} pairs "
+              f"({n_high} high, {len(rule_results) - n_high} none) — no LLM tokens")
+        log.info("Rule-screened %d pairs (%d high)", len(rule_results), n_high)
+
+    if not pairs:
+        print("No pairs left for LLM screening.")
+        print_summary([r for r in rule_results if r.get("confidence") == "high"])
+        conn.close()
+        return
+
     if args.max_pairs is not None:
         if args.max_pairs == 0:
             print("--max-pairs 0: skipping LLM screening.")
@@ -626,7 +768,8 @@ def main() -> None:
     print(f"  DB: {len(all_results)} pair results stored (incremental)")
     print(f"  LLM screening completed in {time.time() - t0:.0f}s", flush=True)
 
-    # ── Filter to confirmed for output ───────────────────────────────────
+    # ── Filter to confirmed for output (LLM + rule results) ─────────────
+    all_results = rule_results + all_results
     confirmed = [r for r in all_results if r.get("confidence") not in ("none", "need_more_info") and r.get("antecedent_ticker") and r.get("consequent_ticker")]
     print(f"  Pairs with implication: {len(confirmed)}")
 

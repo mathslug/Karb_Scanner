@@ -165,6 +165,9 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             continue  # already rebuilt
 
         new_table = f"{table}_new"
+        # A prior run may have died between CREATE and DROP; the original
+        # table still holds the data, so the leftover copy is disposable.
+        conn.execute(f"DROP TABLE IF EXISTS {new_table}")
         conn.execute(create_sql)
         conn.execute(f"INSERT INTO {new_table} SELECT * FROM {table}")
         conn.execute(f"DROP TABLE {table}")
@@ -298,7 +301,7 @@ def record_prices(conn: sqlite3.Connection, markets: list[dict]) -> int:
 
 
 def get_tickers_by_entity(conn: sqlite3.Connection, min_volume: int = 0) -> dict[str, list[dict]]:
-    """Group active tickers by yes_sub_title where entity spans 2+ series.
+    """Group active tickers by yes_sub_title where entity spans 2+ events.
 
     Returns dict mapping entity -> list of market dicts (matching the format
     used by generate_candidate_pairs).
@@ -533,10 +536,15 @@ def compute_hurdle_yield(conn: sqlite3.Connection, days: int | None) -> float | 
     return max(treasury_rate / 100 + buffer, borrow_rate)
 
 
-def get_pairs_for_review(conn: sqlite3.Connection, status: str) -> list[dict]:
+def get_pairs_for_review(
+    conn: sqlite3.Connection, status: str, exclude_expired: bool = False,
+) -> list[dict]:
     """Fetch pairs for review UI.
 
     status: "unreviewed" | "confirmed" | "rejected" | "need_more_info" | "high_unreviewed"
+    exclude_expired: drop pairs whose antecedent expiration has passed
+    (pairs with no known expiration are kept). Used by the review queue and
+    by evaluate.py so resolved pairs stop being evaluated forever.
     Returns list of dicts with pair + joined ticker info + computed arb_cost,
     sorted by cost ascending then confidence descending.
     """
@@ -552,6 +560,12 @@ def get_pairs_for_review(conn: sqlite3.Connection, status: str) -> list[dict]:
         where = "cp.human_review IS NULL AND cp.confidence = 'high' AND cp.antecedent_ticker IS NOT NULL AND cp.consequent_ticker IS NOT NULL"
     else:
         raise ValueError(f"Invalid status: {status}")
+
+    params: tuple = ()
+    if exclude_expired:
+        where += """ AND (COALESCE(ant.expected_expiration_time, '') = ''
+                          OR ant.expected_expiration_time > ?)"""
+        params = (_now_utc(),)
 
     rows = conn.execute(
         f"""SELECT
@@ -575,6 +589,7 @@ def get_pairs_for_review(conn: sqlite3.Connection, status: str) -> list[dict]:
         LEFT JOIN tickers ant ON ant.ticker = cp.antecedent_ticker
         LEFT JOIN tickers con ON con.ticker = cp.consequent_ticker
         WHERE {where}""",
+        params,
     ).fetchall()
 
     result = []
@@ -686,16 +701,29 @@ def reverse_and_confirm(conn: sqlite3.Connection, pair_id: int) -> None:
 
 
 def get_pair_stats(conn: sqlite3.Connection) -> dict:
-    """Return counts for dashboard."""
+    """Return counts for dashboard.
+
+    `unreviewed` and `need_more_info` count only live pairs (antecedent not
+    yet expired) so they match the review queue; `expired_unreviewed` counts
+    the unreviewed pairs hidden by expiry.
+    """
     row = conn.execute(
         """SELECT
             COUNT(*) AS total,
-            SUM(CASE WHEN confidence NOT IN ('none','need_more_info') AND human_review IS NULL THEN 1 ELSE 0 END) AS unreviewed,
+            SUM(CASE WHEN confidence NOT IN ('none','need_more_info') AND human_review IS NULL AND NOT expired THEN 1 ELSE 0 END) AS unreviewed,
             SUM(CASE WHEN human_review = 'confirmed' AND confidence NOT IN ('none','need_more_info') THEN 1 ELSE 0 END) AS confirmed,
             SUM(CASE WHEN human_review = 'rejected' AND confidence NOT IN ('none','need_more_info') THEN 1 ELSE 0 END) AS rejected,
             SUM(CASE WHEN confidence = 'none' THEN 1 ELSE 0 END) AS no_relationship,
-            SUM(CASE WHEN confidence = 'need_more_info' AND human_review IS NULL THEN 1 ELSE 0 END) AS need_more_info
-        FROM candidate_pairs"""
+            SUM(CASE WHEN confidence = 'need_more_info' AND human_review IS NULL AND NOT expired THEN 1 ELSE 0 END) AS need_more_info,
+            SUM(CASE WHEN confidence != 'none' AND human_review IS NULL AND expired THEN 1 ELSE 0 END) AS expired_unreviewed
+        FROM (
+            SELECT cp.confidence, cp.human_review,
+                   (COALESCE(ant.expected_expiration_time, '') != ''
+                    AND ant.expected_expiration_time <= ?) AS expired
+            FROM candidate_pairs cp
+            LEFT JOIN tickers ant ON ant.ticker = cp.antecedent_ticker
+        )""",
+        (_now_utc(),),
     ).fetchone()
     return dict(row)
 
@@ -733,6 +761,26 @@ def insert_trade_evaluation(conn: sqlite3.Connection, eval_dict: dict) -> int:
     )
     conn.commit()
     return cur.lastrowid
+
+
+def get_hot_pair_ids(conn: sqlite3.Connection, max_tob_cost: float) -> set[int]:
+    """Pair ids whose most recent evaluation has tob_cost below the threshold.
+
+    Used by evaluate.py --hot to re-check near-parity pairs frequently without
+    sweeping the whole live set. Pairs never evaluated (or whose latest row
+    lacks tob_cost) are not hot; the full sweeps pick them up.
+    """
+    rows = conn.execute(
+        """SELECT te.pair_id
+           FROM trade_evaluations te
+           INNER JOIN (
+               SELECT pair_id, MAX(evaluated_at) AS max_eval
+               FROM trade_evaluations GROUP BY pair_id
+           ) latest ON te.pair_id = latest.pair_id AND te.evaluated_at = latest.max_eval
+           WHERE te.tob_cost IS NOT NULL AND te.tob_cost < ?""",
+        (max_tob_cost,),
+    ).fetchall()
+    return {r["pair_id"] for r in rows}
 
 
 def get_recent_evaluations(conn: sqlite3.Connection, days: int = 2) -> list[dict]:

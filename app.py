@@ -4,10 +4,13 @@
 import os
 from functools import wraps
 
+from dotenv import load_dotenv
 from flask import Flask, redirect, render_template, request, url_for, Response
 from flask_wtf.csrf import CSRFProtect
 
 import db as db_mod
+
+load_dotenv()
 
 DB_PATH = os.environ.get("SLONK_DB") or os.environ.get("KALSHI_DB", "slonk_arb.db")
 ADMIN_PASSWORD = os.environ.get("SLONK_ADMIN_PASSWORD", "")
@@ -29,6 +32,12 @@ def create_app(db_path: str = DB_PATH) -> Flask:
         auth = request.authorization
         return auth and auth.password == ADMIN_PASSWORD
 
+    def _safe_next(target):
+        """Only allow same-site relative redirect targets ("//" is scheme-relative)."""
+        if target and target.startswith("/") and target[1:2] not in ("/", "\\"):
+            return target
+        return None
+
     def admin_required(f):
         @wraps(f)
         def decorated(*args, **kwargs):
@@ -49,7 +58,7 @@ def create_app(db_path: str = DB_PATH) -> Flask:
     @app.route("/login")
     @admin_required
     def login():
-        return redirect(request.args.get("next", url_for("index")))
+        return redirect(_safe_next(request.args.get("next")) or url_for("index"))
 
     @app.route("/")
     def index():
@@ -67,8 +76,8 @@ def create_app(db_path: str = DB_PATH) -> Flask:
     @app.route("/review")
     def review():
         conn = get_conn()
-        pairs = db_mod.get_pairs_for_review(conn, "unreviewed")
-        need_info = db_mod.get_pairs_for_review(conn, "need_more_info")
+        pairs = db_mod.get_pairs_for_review(conn, "unreviewed", exclude_expired=True)
+        need_info = db_mod.get_pairs_for_review(conn, "need_more_info", exclude_expired=True)
         conn.close()
         pairs = pairs + need_info
         conf = request.args.get("confidence")
@@ -121,10 +130,15 @@ def create_app(db_path: str = DB_PATH) -> Flask:
     @admin_required
     def update_settings():
         conn = get_conn()
-        buffer_bps = request.form.get("buffer_bps", "100")
-        borrow_rate_bps = request.form.get("borrow_rate_bps", "600")
-        db_mod.set_setting(conn, "buffer_bps", buffer_bps)
-        db_mod.set_setting(conn, "borrow_rate_bps", borrow_rate_bps)
+        # compute_hurdle_yield() does int() on these; storing a non-integer
+        # would 500 every review page and crash the evaluate cron.
+        for key, default in (("buffer_bps", "100"), ("borrow_rate_bps", "600")):
+            try:
+                value = int(request.form.get(key, default))
+            except (TypeError, ValueError):
+                continue  # invalid input: keep the existing value
+            if value >= 0:
+                db_mod.set_setting(conn, key, str(value))
         conn.close()
         return redirect(url_for("settings"))
 
@@ -140,7 +154,7 @@ def create_app(db_path: str = DB_PATH) -> Flask:
         else:
             db_mod.set_review(conn, pair_id, decision)
         conn.close()
-        next_url = request.form.get("next") or url_for("pair_detail", pair_id=pair_id)
+        next_url = _safe_next(request.form.get("next")) or url_for("pair_detail", pair_id=pair_id)
         return redirect(next_url)
 
     return app

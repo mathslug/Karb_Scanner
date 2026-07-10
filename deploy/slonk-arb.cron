@@ -6,13 +6,21 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 # 07:30 UTC / 3:30 AM ET / 12:30 AM PT
 30 7 * * * slonk /opt/slonk-arb/deploy/run.sh scan.py --category Sports --max-pairs 0 --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/scan.log >> /var/log/slonk-arb/cron.log 2>&1
 
-# Fetch Treasury yields + scan tennis, hockey + evaluate (chained)
+# Fetch Treasury yields + scan tennis, hockey, golf (rules + Anthropic LLM) + evaluate (chained)
 # 08:00 UTC / 4:00 AM ET / 1:00 AM PT
+# (To switch the LLM to an ephemeral GPU backend, replace the scan.py segment
+#  with /opt/slonk-arb/deploy/run_scan_gpu.sh and add a midday
+#  "run.sh gpu_droplet.py destroy" safety sweep.)
 0 8 * * * slonk /opt/slonk-arb/deploy/run.sh fetch_yields.py --db /var/lib/slonk-arb/slonk_arb.db >> /var/log/slonk-arb/cron.log 2>&1 ; /opt/slonk-arb/deploy/run.sh scan.py --from-db --filter "tennis,hockey,golf" --min-volume 200 --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/scan.log >> /var/log/slonk-arb/cron.log 2>&1 ; /opt/slonk-arb/deploy/run.sh evaluate.py --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/evaluate.log >> /var/log/slonk-arb/cron.log 2>&1 ; /opt/slonk-arb/deploy/run.sh evaluate.py --mode high --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/evaluate-high.log >> /var/log/slonk-arb/cron.log 2>&1
 
-# Midday re-evaluation of confirmed + high-confidence pairs
-# 20:00 UTC / 4:00 PM ET / 1:00 PM PT
-0 20 * * * slonk /opt/slonk-arb/deploy/run.sh evaluate.py --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/evaluate.log >> /var/log/slonk-arb/cron.log 2>&1 ; /opt/slonk-arb/deploy/run.sh evaluate.py --mode high --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/evaluate-high.log >> /var/log/slonk-arb/cron.log 2>&1
+# Full re-evaluation sweeps of confirmed + high-confidence pairs
+# 15:00 & 20:00 UTC / 11:00 AM & 4:00 PM ET
+0 15,20 * * * slonk /opt/slonk-arb/deploy/run.sh evaluate.py --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/evaluate.log >> /var/log/slonk-arb/cron.log 2>&1 ; /opt/slonk-arb/deploy/run.sh evaluate.py --mode high --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/evaluate-high.log >> /var/log/slonk-arb/cron.log 2>&1
+
+# Hot tier: hourly re-check of pairs whose latest top-of-book cost is near
+# parity (small set, ~2 min) — catches intraday dislocations between sweeps
+# 30 minutes past every hour
+30 * * * * slonk /opt/slonk-arb/deploy/run.sh evaluate.py --hot --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/evaluate.log >> /var/log/slonk-arb/cron.log 2>&1 ; /opt/slonk-arb/deploy/run.sh evaluate.py --hot --mode high --db /var/lib/slonk-arb/slonk_arb.db --log-file /var/log/slonk-arb/evaluate-high.log >> /var/log/slonk-arb/cron.log 2>&1
 
 # Backup DB weekly (Sunday 3:00 AM ET / 7:00 UTC)
 0 7 * * 0 slonk cp /var/lib/slonk-arb/slonk_arb.db /var/lib/slonk-arb/backups/slonk_arb_$(date +\%Y\%m\%d).db 2>&1

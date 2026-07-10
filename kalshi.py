@@ -96,7 +96,9 @@ def taker_fee(num_contracts: int, price: float) -> float:
     P is contract price in dollars [0, 1]. Result rounded up to nearest cent.
     """
     raw = TAKER_FEE_COEFF * num_contracts * price * (1.0 - price)
-    return math.ceil(raw * 100) / 100
+    # Round before ceil: float noise (e.g. 175.00000000000003 for an exact
+    # 175-cent fee) must not push the ceiling up an extra cent.
+    return math.ceil(round(raw * 100, 9)) / 100
 
 
 def walk_book(opposite_bids: list[tuple[float, int]], n: int) -> LegResult:

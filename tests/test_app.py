@@ -111,3 +111,64 @@ def test_login_redirect(authed_client):
         headers={"Authorization": "Basic dGVzdDp0ZXN0cGFzcw=="},
     )
     assert resp.status_code == 302
+
+
+def test_login_rejects_external_redirect(authed_client):
+    resp = authed_client.get(
+        "/login?next=https://evil.example.com/",
+        headers={"Authorization": "Basic dGVzdDp0ZXN0cGFzcw=="},
+    )
+    assert resp.status_code == 302
+    assert "evil.example.com" not in resp.headers["Location"]
+
+
+def test_review_hides_expired_but_reviewed_keeps_them(tmp_path):
+    """Expired pairs leave the review queue; /reviewed history still shows them."""
+    from datetime import datetime, timedelta, timezone
+
+    db_path = str(tmp_path / "test.db")
+    conn = db_mod.get_connection(db_path)
+    past = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    db_mod.upsert_tickers(conn, [
+        {"ticker": "EXP-A", "series_ticker": "S1", "event_ticker": "E1",
+         "title": "Expired A", "yes_sub_title": "X", "rules_primary": "",
+         "expected_expiration_time": past, "close_time": past,
+         "last_price_dollars": "0.5", "yes_ask_dollars": "0.5",
+         "no_ask_dollars": "0.5", "volume": 500,
+         "sport_tag": "Tennis", "sub_sport": "Tennis"},
+        {"ticker": "EXP-B", "series_ticker": "S2", "event_ticker": "E2",
+         "title": "Expired B", "yes_sub_title": "X", "rules_primary": "",
+         "expected_expiration_time": past, "close_time": past,
+         "last_price_dollars": "0.5", "yes_ask_dollars": "0.5",
+         "no_ask_dollars": "0.5", "volume": 500,
+         "sport_tag": "Tennis", "sub_sport": "Tennis"},
+    ])
+    db_mod.bulk_upsert_pair_results(conn, [{
+        "ticker_a": "EXP-A", "ticker_b": "EXP-B",
+        "antecedent_ticker": "EXP-A", "consequent_ticker": "EXP-B",
+        "confidence": "high", "reasoning": "expired pair",
+    }], "test-model")
+
+    application = create_app(db_path)
+    application.config["TESTING"] = True
+    with application.test_client() as c:
+        assert b"EXP-A" not in c.get("/review").data
+
+        pair_id = conn.execute("SELECT id FROM candidate_pairs LIMIT 1").fetchone()["id"]
+        db_mod.set_review(conn, pair_id, "confirmed")
+        assert b"EXP-A" in c.get("/reviewed").data
+        assert c.get(f"/pair/{pair_id}").status_code == 200
+    conn.close()
+
+
+def test_post_settings_invalid_value_kept_out_of_db(authed_client):
+    # Empty/garbage input must not be stored: compute_hurdle_yield() int()s
+    # these settings, so a bad value would 500 every review page.
+    resp = authed_client.post(
+        "/settings",
+        data={"buffer_bps": "", "borrow_rate_bps": "abc"},
+        headers={"Authorization": "Basic dGVzdDp0ZXN0cGFzcw=="},
+    )
+    assert resp.status_code == 302
+    resp = authed_client.get("/review")
+    assert resp.status_code == 200
