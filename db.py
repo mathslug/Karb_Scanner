@@ -711,42 +711,31 @@ def reverse_and_confirm(conn: sqlite3.Connection, pair_id: int) -> None:
 
 
 def get_pair_stats(conn: sqlite3.Connection) -> dict:
-    """Return dashboard stats as a MECE grid: every pair lands in exactly one
-    (status, liveness) cell, so cells sum to `total`.
+    """Return counts for dashboard.
 
-    Status is assigned by precedence — a human decision wins over the
-    screener verdict: confirmed, rejected, no_implication (screener said
-    'none'), else awaiting (includes need_more_info, matching the queue page).
-    A pair is expired when its antecedent's expected_expiration_time has
-    passed; unknown expiration counts as live (matching get_pairs_for_review).
-    `awaiting_live` equals the review queue count.
+    `unreviewed` and `need_more_info` count only live pairs (antecedent not
+    yet expired) so they match the review queue; `expired_unreviewed` counts
+    the unreviewed pairs hidden by expiry.
     """
-    rows = conn.execute(
+    row = conn.execute(
         """SELECT
-             CASE
-               WHEN cp.human_review = 'confirmed' THEN 'confirmed'
-               WHEN cp.human_review = 'rejected' THEN 'rejected'
-               WHEN cp.confidence = 'none' THEN 'no_implication'
-               ELSE 'awaiting'
-             END AS status,
-             (COALESCE(ant.expected_expiration_time, '') != ''
-              AND ant.expected_expiration_time <= ?) AS expired,
-             COUNT(*) AS n
-           FROM candidate_pairs cp
-           LEFT JOIN tickers ant ON ant.ticker = cp.antecedent_ticker
-           GROUP BY status, expired""",
+            COUNT(*) AS total,
+            SUM(CASE WHEN confidence NOT IN ('none','need_more_info') AND human_review IS NULL AND NOT expired THEN 1 ELSE 0 END) AS unreviewed,
+            SUM(CASE WHEN human_review = 'confirmed' AND confidence NOT IN ('none','need_more_info') THEN 1 ELSE 0 END) AS confirmed,
+            SUM(CASE WHEN human_review = 'rejected' AND confidence NOT IN ('none','need_more_info') THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN confidence = 'none' THEN 1 ELSE 0 END) AS no_relationship,
+            SUM(CASE WHEN confidence = 'need_more_info' AND human_review IS NULL AND NOT expired THEN 1 ELSE 0 END) AS need_more_info,
+            SUM(CASE WHEN confidence != 'none' AND human_review IS NULL AND expired THEN 1 ELSE 0 END) AS expired_unreviewed
+        FROM (
+            SELECT cp.confidence, cp.human_review,
+                   (COALESCE(ant.expected_expiration_time, '') != ''
+                    AND ant.expected_expiration_time <= ?) AS expired
+            FROM candidate_pairs cp
+            LEFT JOIN tickers ant ON ant.ticker = cp.antecedent_ticker
+        )""",
         (_now_utc(),),
-    ).fetchall()
-    stats = {
-        f"{status}_{liveness}": 0
-        for status in ("awaiting", "confirmed", "rejected", "no_implication")
-        for liveness in ("live", "expired")
-    }
-    for r in rows:
-        key = f"{r['status']}_{'expired' if r['expired'] else 'live'}"
-        stats[key] = r["n"]
-    stats["total"] = sum(stats.values())
-    return stats
+    ).fetchone()
+    return dict(row)
 
 
 # ---------------------------------------------------------------------------
