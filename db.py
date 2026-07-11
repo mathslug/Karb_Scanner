@@ -552,9 +552,10 @@ def get_pairs_for_review(
     """Fetch pairs for review UI.
 
     status: "unreviewed" | "confirmed" | "rejected" | "need_more_info" | "high_unreviewed"
-    exclude_expired: drop pairs whose antecedent expiration has passed
-    (pairs with no known expiration are kept). Used by the review queue and
-    by evaluate.py so resolved pairs stop being evaluated forever.
+    exclude_expired: drop pairs where either leg's expiration has passed —
+    the arb needs both markets open (legs with no known expiration are
+    treated as open). Used by the review queue and by evaluate.py so
+    resolved pairs stop being evaluated forever.
     Returns list of dicts with pair + joined ticker info + computed arb_cost,
     sorted by cost ascending then confidence descending.
     """
@@ -574,8 +575,11 @@ def get_pairs_for_review(
     params: tuple = ()
     if exclude_expired:
         where += """ AND (COALESCE(ant.expected_expiration_time, '') = ''
-                          OR ant.expected_expiration_time > ?)"""
-        params = (_now_utc(),)
+                          OR ant.expected_expiration_time > ?)
+                     AND (COALESCE(con.expected_expiration_time, '') = ''
+                          OR con.expected_expiration_time > ?)"""
+        now = _now_utc()
+        params = (now, now)
 
     rows = conn.execute(
         f"""SELECT
@@ -717,10 +721,11 @@ def get_pair_stats(conn: sqlite3.Connection) -> dict:
     (includes need_more_info). `confirmed_live`: confirmed pairs whose
     antecedent hasn't expired. `rules_rejected`/`llm_rejected`: live
     unreviewed pairs screened 'none' by the rule screener / an LLM.
-    `review_rejected`: live human-rejected pairs. `expired`: all pairs whose
-    antecedent has expired, regardless of status. Unknown expiration counts
+    `review_rejected`: live human-rejected pairs. `expired`: all pairs where
+    either leg has expired, regardless of status. Unknown expiration counts
     as live, matching get_pairs_for_review.
     """
+    now = _now_utc()
     row = conn.execute(
         """SELECT
             SUM(CASE WHEN human_review IS NULL AND confidence != 'none'
@@ -737,12 +742,15 @@ def get_pair_stats(conn: sqlite3.Connection) -> dict:
         FROM (
             SELECT cp.confidence, cp.human_review,
                    (COALESCE(cp.llm_model, '') = 'rule-screener-v1') AS is_rule,
-                   (COALESCE(ant.expected_expiration_time, '') != ''
-                    AND ant.expected_expiration_time <= ?) AS expired
+                   ((COALESCE(ant.expected_expiration_time, '') != ''
+                     AND ant.expected_expiration_time <= ?)
+                    OR (COALESCE(con.expected_expiration_time, '') != ''
+                        AND con.expected_expiration_time <= ?)) AS expired
             FROM candidate_pairs cp
             LEFT JOIN tickers ant ON ant.ticker = cp.antecedent_ticker
+            LEFT JOIN tickers con ON con.ticker = cp.consequent_ticker
         )""",
-        (_now_utc(),),
+        (now, now),
     ).fetchone()
     return {k: row[k] or 0 for k in row.keys()}
 

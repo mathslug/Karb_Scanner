@@ -148,7 +148,7 @@ All take `conn: sqlite3.Connection` as first arg:
 - `get_screened_pair_keys(conn)` -- set of already-evaluated pair keys
 - `bulk_upsert_pair_results(conn, results, model, auto_confirm_high=False)` -- store screening results; `auto_confirm_high` marks `high` results confirmed (rule screener)
 - `deactivate_missing_tickers(conn, active_tickers)` -- mark disappeared tickers inactive
-- `get_pairs_for_review(conn, status, exclude_expired=False)` -- fetch pairs for review UI (`unreviewed`/`confirmed`/`rejected`/`need_more_info`/`high_unreviewed`); `exclude_expired=True` drops pairs whose antecedent `expected_expiration_time` has passed (used by the review queue and evaluate.py so resolved pairs retire instead of being shown/evaluated forever; pairs with unknown expiration are kept)
+- `get_pairs_for_review(conn, status, exclude_expired=False)` -- fetch pairs for review UI (`unreviewed`/`confirmed`/`rejected`/`need_more_info`/`high_unreviewed`); `exclude_expired=True` drops pairs where either leg's `expected_expiration_time` has passed — the arb needs both markets open (used by the review queue and evaluate.py so resolved pairs retire instead of being shown/evaluated forever; legs with unknown expiration are treated as open)
 - `get_pair_detail(conn, pair_id)` -- full info for a single pair
 - `set_review(conn, pair_id, decision)` -- set human review
 

@@ -244,13 +244,13 @@ def _iso(days_from_now):
 
 def _seed_pair_with_expiration(conn, ticker_a, ticker_b, expiration,
                                confidence="high", human_review=None,
-                               model="test-model"):
+                               model="test-model", con_expiration=None):
     """Seed a pair whose antecedent ticker has the given expiration."""
     db.upsert_tickers(conn, [
         _make_market(ticker=ticker_a, series_ticker="S1",
                      expected_expiration_time=expiration),
         _make_market(ticker=ticker_b, series_ticker="S2",
-                     expected_expiration_time=_iso(365)),
+                     expected_expiration_time=con_expiration or _iso(365)),
     ])
     db.bulk_upsert_pair_results(conn, [{
         "ticker_a": ticker_a, "ticker_b": ticker_b,
@@ -286,6 +286,14 @@ def test_exclude_expired_applies_to_confirmed_and_high(conn):
 def test_exclude_expired_keeps_unknown_expiration(conn):
     _seed_pair_with_expiration(conn, "E-A", "E-B", "")
     assert len(db.get_pairs_for_review(conn, "unreviewed", exclude_expired=True)) == 1
+
+
+def test_exclude_expired_drops_past_consequent(conn):
+    # Antecedent still live, consequent market already settled -> pair is dead
+    _seed_pair_with_expiration(conn, "X-A", "X-B", _iso(30), con_expiration=_iso(-5))
+    assert db.get_pairs_for_review(conn, "unreviewed", exclude_expired=True) == []
+    # Default keeps it
+    assert len(db.get_pairs_for_review(conn, "unreviewed")) == 1
 
 
 # ── set_review + reverse_and_confirm ─────────────────────────────────────────
@@ -357,6 +365,14 @@ def test_get_pair_stats_excludes_expired(conn):
     assert stats["queue"] == 1  # matches the review queue
     assert stats["confirmed_live"] == 0
     assert stats["expired"] == 2  # any status counts
+
+
+def test_get_pair_stats_expired_consequent_counts_as_expired(conn):
+    _seed_pair_with_expiration(conn, "A", "B", _iso(30), con_expiration=_iso(-5),
+                               human_review="confirmed")
+    stats = db.get_pair_stats(conn)
+    assert stats["confirmed_live"] == 0
+    assert stats["expired"] == 1
 
 
 def test_get_pair_stats_rejected_breakdown(conn):

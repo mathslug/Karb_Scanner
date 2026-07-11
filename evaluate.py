@@ -64,7 +64,7 @@ def main() -> None:
 
     conn = db_mod.get_connection(args.db)
     db_status = "confirmed" if args.mode == "confirmed" else "high_unreviewed"
-    # exclude_expired: once a pair's antecedent expiration passes it can never
+    # exclude_expired: once either leg's expiration passes the pair can never
     # be a trade again — without this, resolved pairs get re-evaluated forever.
     pairs = db_mod.get_pairs_for_review(conn, db_status, exclude_expired=True)
 
