@@ -323,9 +323,38 @@ def test_get_pair_stats(conn):
     _seed_pair_with_expiration(conn, "C", "D", _iso(30), confidence="none")
     stats = db.get_pair_stats(conn)
     assert stats["total"] == 2
-    assert stats["unreviewed"] == 1  # 'none' excluded
-    assert stats["no_relationship"] == 1
-    assert stats["expired_unreviewed"] == 0
+    assert stats["awaiting_live"] == 1  # 'none' excluded
+    assert stats["no_implication_live"] == 1
+    assert stats["awaiting_expired"] == 0
+
+
+def test_get_pair_stats_is_mece(conn):
+    # One pair per (status, liveness) combination
+    _seed_pair_with_expiration(conn, "A1", "B1", _iso(30), confidence="high")
+    _seed_pair_with_expiration(conn, "A2", "B2", _iso(-5), confidence="high")
+    _seed_pair_with_expiration(conn, "A3", "B3", _iso(30), confidence="high",
+                               human_review="confirmed")
+    _seed_pair_with_expiration(conn, "A4", "B4", _iso(-5), confidence="high",
+                               human_review="rejected")
+    _seed_pair_with_expiration(conn, "A5", "B5", _iso(30), confidence="none")
+    _seed_pair_with_expiration(conn, "A6", "B6", _iso(30), confidence="need_more_info")
+    stats = db.get_pair_stats(conn)
+    assert stats["awaiting_live"] == 2  # high + need_more_info
+    assert stats["awaiting_expired"] == 1
+    assert stats["confirmed_live"] == 1
+    assert stats["rejected_expired"] == 1
+    assert stats["no_implication_live"] == 1
+    cells = sum(v for k, v in stats.items() if k != "total")
+    assert cells == stats["total"] == 6
+
+
+def test_get_pair_stats_review_wins_over_verdict(conn):
+    # A rejected pair with confidence 'none' counts as rejected, not no_implication
+    _seed_pair_with_expiration(conn, "A", "B", _iso(30), confidence="none",
+                               human_review="rejected")
+    stats = db.get_pair_stats(conn)
+    assert stats["rejected_live"] == 1
+    assert stats["no_implication_live"] == 0
 
 
 def test_get_hot_pair_ids_uses_latest_evaluation(conn):
@@ -347,12 +376,12 @@ def test_get_hot_pair_ids_ignores_null_tob(conn):
     assert db.get_hot_pair_ids(conn, 1.03) == set()
 
 
-def test_get_pair_stats_expired_excluded_from_unreviewed(conn):
+def test_get_pair_stats_expired_excluded_from_queue(conn):
     _seed_pair_with_expiration(conn, "A", "B", _iso(-5), confidence="high")
     _seed_pair_with_expiration(conn, "C", "D", _iso(30), confidence="high")
     stats = db.get_pair_stats(conn)
-    assert stats["unreviewed"] == 1  # matches the review queue
-    assert stats["expired_unreviewed"] == 1
+    assert stats["awaiting_live"] == 1  # matches the review queue
+    assert stats["awaiting_expired"] == 1
 
 
 # ── settings ─────────────────────────────────────────────────────────────────

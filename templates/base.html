@@ -29,26 +29,60 @@
     <h2>Dashboard</h2>
     <div class="grid">
       <article>
-        <header>Total Pairs</header>
-        <p style="font-size:2rem;text-align:center">{{ stats.total or 0 }}</p>
+        <header>Review Queue</header>
+        <p style="font-size:2rem;text-align:center;margin-bottom:0"><a href="/review">{{ stats.awaiting_live or 0 }}</a></p>
+        <p style="text-align:center"><small>live pairs awaiting your confirm/reject</small></p>
       </article>
       <article>
-        <header>Unreviewed</header>
-        <p style="font-size:2rem;text-align:center"><a href="/review">{{ stats.unreviewed or 0 }}</a></p>
-      </article>
-      <article>
-        <header>Confirmed</header>
-        <p style="font-size:2rem;text-align:center">{{ stats.confirmed or 0 }}</p>
-      </article>
-      <article>
-        <header>Rejected</header>
-        <p style="font-size:2rem;text-align:center">{{ stats.rejected or 0 }}</p>
+        <header>Confirmed &amp; Live</header>
+        <p style="font-size:2rem;text-align:center;margin-bottom:0"><a href="/reviewed">{{ stats.confirmed_live or 0 }}</a></p>
+        <p style="text-align:center"><small>pairs in the trade-evaluation rotation</small></p>
       </article>
     </div>
     <article>
-      <p><strong>How to use:</strong> An LLM scans Kalshi sports markets for logical implication pairs (e.g. "Alcaraz wins French Open" &rarr; "Alcaraz wins a Grand Slam"). Go to the <a href="/review"><strong>Queue</strong></a> to review and confirm these relationships. Then check <a href="/trades"><strong>Recs</strong></a> periodically to see if any confirmed (or unconfirmed high confidence) pairs have become profitable trades.</p>
+      <p><strong>How to use:</strong> The scanner screens Kalshi sports markets for logical implication pairs (e.g. "Alcaraz wins French Open" &rarr; "Alcaraz wins a Grand Slam") — deterministic lattice rules auto-confirm the obvious ones, an LLM screens the rest into the <a href="/review"><strong>Queue</strong></a> for your review. Confirmed pairs are re-evaluated against live orderbooks several times a day. <strong>When an evaluation finds a profitable trade, you get an email automatically</strong> &mdash; no need to poll <a href="/trades"><strong>Recs</strong></a>; that tab is history on demand.</p>
     </article>
-    <p>No relationship: {{ stats.no_relationship or 0 }} | Need more info: {{ stats.need_more_info or 0 }} | Expired unreviewed: {{ stats.expired_unreviewed or 0 }}</p>
+    <h4>All screened pairs</h4>
+    <table>
+      <thead>
+        <tr><th></th><th>Live</th><th>Expired</th><th>Total</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Awaiting review</td>
+          <td><a href="/review">{{ stats.awaiting_live or 0 }}</a></td>
+          <td>{{ stats.awaiting_expired or 0 }}</td>
+          <td>{{ (stats.awaiting_live or 0) + (stats.awaiting_expired or 0) }}</td>
+        </tr>
+        <tr>
+          <td>Confirmed</td>
+          <td>{{ stats.confirmed_live or 0 }}</td>
+          <td>{{ stats.confirmed_expired or 0 }}</td>
+          <td>{{ (stats.confirmed_live or 0) + (stats.confirmed_expired or 0) }}</td>
+        </tr>
+        <tr>
+          <td>Rejected</td>
+          <td>{{ stats.rejected_live or 0 }}</td>
+          <td>{{ stats.rejected_expired or 0 }}</td>
+          <td>{{ (stats.rejected_live or 0) + (stats.rejected_expired or 0) }}</td>
+        </tr>
+        <tr>
+          <td>No implication</td>
+          <td>{{ stats.no_implication_live or 0 }}</td>
+          <td>{{ stats.no_implication_expired or 0 }}</td>
+          <td>{{ (stats.no_implication_live or 0) + (stats.no_implication_expired or 0) }}</td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr>
+          <th>Total</th>
+          <th>{{ (stats.awaiting_live or 0) + (stats.confirmed_live or 0) + (stats.rejected_live or 0) + (stats.no_implication_live or 0) }}</th>
+          <th>{{ (stats.awaiting_expired or 0) + (stats.confirmed_expired or 0) + (stats.rejected_expired or 0) + (stats.no_implication_expired or 0) }}</th>
+          <th>{{ stats.total or 0 }}</th>
+        </tr>
+      </tfoot>
+    </table>
+    <p><small>Each pair counts in exactly one cell. A human decision wins over the screener verdict; "No implication" is unreviewed pairs the screener ruled out; "Expired" means the antecedent market has closed. Auto-confirmed lattice pairs count as Confirmed.</small></p>
     <p><small><a href="https://github.com/mathslug/Karb_Scanner" target="_blank">GitHub</a></small></p>
     {% endif %}
     {% endblock %}
