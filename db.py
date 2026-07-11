@@ -344,11 +344,16 @@ def bulk_upsert_pair_results(
     conn: sqlite3.Connection,
     results: list[dict],
     model: str,
+    auto_confirm_high: bool = False,
 ) -> int:
     """Store LLM screening results (including 'none' confidence).
 
     Each result dict must have ticker_a, ticker_b, and may have antecedent_ticker,
     consequent_ticker, confidence, reasoning. Returns count of rows upserted.
+
+    auto_confirm_high: mark 'high' results as human_review='confirmed' (used by
+    the deterministic rule screener, whose verdicts don't need human review).
+    An existing human review is never overwritten.
     """
     count = 0
     now = _now_utc()
@@ -356,23 +361,28 @@ def bulk_upsert_pair_results(
         ta, tb = _sorted_pair(r["ticker_a"], r["ticker_b"])
         ant = r.get("antecedent_ticker") or ta
         con = r.get("consequent_ticker") or tb
+        review = "confirmed" if auto_confirm_high and r.get("confidence") == "high" else None
         conn.execute(
             """INSERT INTO candidate_pairs
                 (ticker_a, ticker_b, antecedent_ticker, consequent_ticker,
-                 confidence, reasoning, llm_model, screened_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 confidence, reasoning, llm_model, screened_at,
+                 human_review, reviewed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker_a, ticker_b) DO UPDATE SET
                 antecedent_ticker = excluded.antecedent_ticker,
                 consequent_ticker = excluded.consequent_ticker,
                 confidence = excluded.confidence,
                 reasoning = excluded.reasoning,
                 llm_model = excluded.llm_model,
-                screened_at = excluded.screened_at""",
+                screened_at = excluded.screened_at,
+                human_review = COALESCE(candidate_pairs.human_review, excluded.human_review),
+                reviewed_at = COALESCE(candidate_pairs.reviewed_at, excluded.reviewed_at)""",
             (
                 ta, tb,
                 ant, con,
                 r.get("confidence"), r.get("reasoning"),
                 model, now,
+                review, now if review else None,
             ),
         )
         count += 1

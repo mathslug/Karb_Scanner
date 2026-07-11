@@ -737,10 +737,12 @@ def main() -> None:
     # ── Rule-based screening (free) before the LLM ───────────────────────
     rule_results, pairs = rule_screen_pairs(pairs)
     if rule_results:
-        db_mod.bulk_upsert_pair_results(conn, rule_results, RULE_SCREENER_MODEL)
+        db_mod.bulk_upsert_pair_results(
+            conn, rule_results, RULE_SCREENER_MODEL, auto_confirm_high=True,
+        )
         n_high = sum(1 for r in rule_results if r["confidence"] == "high")
         print(f"  Rule-screened {len(rule_results)} pairs "
-              f"({n_high} high, {len(rule_results) - n_high} none) — no LLM tokens")
+              f"({n_high} high auto-confirmed, {len(rule_results) - n_high} none) — no LLM tokens")
         log.info("Rule-screened %d pairs (%d high)", len(rule_results), n_high)
 
     if not pairs:

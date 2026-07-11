@@ -150,6 +150,45 @@ def test_bulk_upsert_sorted_order(conn):
     assert ("A", "Z") in screened  # stored in sorted order
 
 
+def test_bulk_upsert_auto_confirm_high(conn):
+    db.upsert_tickers(conn, [_make_market(ticker="A"), _make_market(ticker="B"),
+                             _make_market(ticker="C"), _make_market(ticker="D")])
+    db.bulk_upsert_pair_results(conn, [
+        {"ticker_a": "A", "ticker_b": "B", "antecedent_ticker": "A",
+         "consequent_ticker": "B", "confidence": "high", "reasoning": "rule"},
+        {"ticker_a": "C", "ticker_b": "D", "confidence": "none", "reasoning": "rule"},
+    ], "rule-screener-v1", auto_confirm_high=True)
+    rows = {(r["ticker_a"], r["ticker_b"]): r for r in conn.execute(
+        "SELECT ticker_a, ticker_b, human_review, reviewed_at FROM candidate_pairs"
+    ).fetchall()}
+    assert rows[("A", "B")]["human_review"] == "confirmed"
+    assert rows[("A", "B")]["reviewed_at"] is not None
+    assert rows[("C", "D")]["human_review"] is None
+    assert rows[("C", "D")]["reviewed_at"] is None
+
+
+def test_bulk_upsert_auto_confirm_preserves_existing_review(conn):
+    pair_id = _seed_pair(conn, "A", "B", "high", "rejected")
+    db.bulk_upsert_pair_results(conn, [{
+        "ticker_a": "A", "ticker_b": "B", "antecedent_ticker": "A",
+        "consequent_ticker": "B", "confidence": "high", "reasoning": "rule",
+    }], "rule-screener-v1", auto_confirm_high=True)
+    row = conn.execute(
+        "SELECT human_review FROM candidate_pairs WHERE id = ?", (pair_id,)
+    ).fetchone()
+    assert row["human_review"] == "rejected"
+
+
+def test_bulk_upsert_without_auto_confirm_leaves_unreviewed(conn):
+    db.upsert_tickers(conn, [_make_market(ticker="A"), _make_market(ticker="B")])
+    db.bulk_upsert_pair_results(conn, [{
+        "ticker_a": "A", "ticker_b": "B", "antecedent_ticker": "A",
+        "consequent_ticker": "B", "confidence": "high", "reasoning": "llm",
+    }], "test-model")
+    row = conn.execute("SELECT human_review FROM candidate_pairs").fetchone()
+    assert row["human_review"] is None
+
+
 # ── get_pairs_for_review ─────────────────────────────────────────────────────
 
 

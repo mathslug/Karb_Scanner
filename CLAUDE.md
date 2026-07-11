@@ -117,7 +117,7 @@ Implication relationships almost always involve the same entity: "Alcaraz wins F
 
 ### Rule-based screening
 
-Before any LLM call, `rule_screen_pairs()` decides pairs whose answer is deterministic from series tickers (~60% of historical volume, ~85% of golf): finish-position lattices (`KXPGATOUR ⊂ KXPGATOP5 ⊂ KXPGATOP10 ⊂ KXPGATOP20 ⊂ KXPGAMAKECUT`, the `KXPGAR1*` round-1 lattice, and LIV equivalents) → `high` with the narrower market as antecedent when same tournament; `none` for cross-tournament or cross-lattice (round vs final) combinations. Results are stored with `llm_model = "rule-screener-v1"`. Everything else — season aggregates (`KXPGAMAJORWIN`), `KXPGAR2LEAD` (cut-timing domain knowledge), tennis/hockey structures — defers to the LLM. Validated against 5,451 LLM-screened pairs: 98.5% agreement, zero direction mismatches; all 82 disagreements were LLM errors on one tournament (Valspar), not rule errors.
+Before any LLM call, `rule_screen_pairs()` decides pairs whose answer is deterministic from series tickers (~60% of historical volume, ~85% of golf): finish-position lattices (`KXPGATOUR ⊂ KXPGATOP5 ⊂ KXPGATOP10 ⊂ KXPGATOP20 ⊂ KXPGAMAKECUT`, the `KXPGAR1*` round-1 lattice, and LIV equivalents) → `high` with the narrower market as antecedent when same tournament; `none` for cross-tournament or cross-lattice (round vs final) combinations. Results are stored with `llm_model = "rule-screener-v1"`; `high` results are auto-confirmed (`human_review = 'confirmed'`) since the verdicts are deterministic — they skip the review queue and go straight to the confirmed evaluation sweeps. An existing human review is never overwritten. Everything else — season aggregates (`KXPGAMAJORWIN`), `KXPGAR2LEAD` (cut-timing domain knowledge), tennis/hockey structures — defers to the LLM. Validated against 5,451 LLM-screened pairs: 98.5% agreement, zero direction mismatches; all 82 disagreements were LLM errors on one tournament (Valspar), not rule errors.
 
 ### LLM screening
 
@@ -146,7 +146,7 @@ All take `conn: sqlite3.Connection` as first arg:
 - `record_prices(conn, markets)` -- append price snapshots to history table
 - `get_tickers_by_entity(conn, min_volume)` -- group active tickers by entity (2+ events)
 - `get_screened_pair_keys(conn)` -- set of already-evaluated pair keys
-- `bulk_upsert_pair_results(conn, results, model)` -- store LLM results
+- `bulk_upsert_pair_results(conn, results, model, auto_confirm_high=False)` -- store screening results; `auto_confirm_high` marks `high` results confirmed (rule screener)
 - `deactivate_missing_tickers(conn, active_tickers)` -- mark disappeared tickers inactive
 - `get_pairs_for_review(conn, status, exclude_expired=False)` -- fetch pairs for review UI (`unreviewed`/`confirmed`/`rejected`/`need_more_info`/`high_unreviewed`); `exclude_expired=True` drops pairs whose antecedent `expected_expiration_time` has passed (used by the review queue and evaluate.py so resolved pairs retire instead of being shown/evaluated forever; pairs with unknown expiration are kept)
 - `get_pair_detail(conn, pair_id)` -- full info for a single pair
