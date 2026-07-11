@@ -321,11 +321,11 @@ def test_reverse_and_confirm(conn):
 def test_get_pair_stats(conn):
     _seed_pair_with_expiration(conn, "A", "B", _iso(30), confidence="high")
     _seed_pair_with_expiration(conn, "C", "D", _iso(30), confidence="none")
+    _seed_pair_with_expiration(conn, "E", "F", _iso(30), confidence="high",
+                               human_review="confirmed")
     stats = db.get_pair_stats(conn)
-    assert stats["total"] == 2
-    assert stats["unreviewed"] == 1  # 'none' excluded
-    assert stats["no_relationship"] == 1
-    assert stats["expired_unreviewed"] == 0
+    assert stats["queue"] == 1  # 'none' and confirmed excluded
+    assert stats["confirmed_live"] == 1
 
 
 def test_get_hot_pair_ids_uses_latest_evaluation(conn):
@@ -347,12 +347,14 @@ def test_get_hot_pair_ids_ignores_null_tob(conn):
     assert db.get_hot_pair_ids(conn, 1.03) == set()
 
 
-def test_get_pair_stats_expired_excluded_from_unreviewed(conn):
+def test_get_pair_stats_excludes_expired(conn):
     _seed_pair_with_expiration(conn, "A", "B", _iso(-5), confidence="high")
     _seed_pair_with_expiration(conn, "C", "D", _iso(30), confidence="high")
+    _seed_pair_with_expiration(conn, "E", "F", _iso(-5), confidence="high",
+                               human_review="confirmed")
     stats = db.get_pair_stats(conn)
-    assert stats["unreviewed"] == 1  # matches the review queue
-    assert stats["expired_unreviewed"] == 1
+    assert stats["queue"] == 1  # matches the review queue
+    assert stats["confirmed_live"] == 0
 
 
 # ── settings ─────────────────────────────────────────────────────────────────

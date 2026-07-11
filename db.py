@@ -711,21 +711,19 @@ def reverse_and_confirm(conn: sqlite3.Connection, pair_id: int) -> None:
 
 
 def get_pair_stats(conn: sqlite3.Connection) -> dict:
-    """Return counts for dashboard.
+    """Return dashboard counts.
 
-    `unreviewed` and `need_more_info` count only live pairs (antecedent not
-    yet expired) so they match the review queue; `expired_unreviewed` counts
-    the unreviewed pairs hidden by expiry.
+    `queue`: live unreviewed candidates, matching the review page count
+    (includes need_more_info). `confirmed_live`: confirmed pairs whose
+    antecedent hasn't expired. Unknown expiration counts as live, matching
+    get_pairs_for_review.
     """
     row = conn.execute(
         """SELECT
-            COUNT(*) AS total,
-            SUM(CASE WHEN confidence NOT IN ('none','need_more_info') AND human_review IS NULL AND NOT expired THEN 1 ELSE 0 END) AS unreviewed,
-            SUM(CASE WHEN human_review = 'confirmed' AND confidence NOT IN ('none','need_more_info') THEN 1 ELSE 0 END) AS confirmed,
-            SUM(CASE WHEN human_review = 'rejected' AND confidence NOT IN ('none','need_more_info') THEN 1 ELSE 0 END) AS rejected,
-            SUM(CASE WHEN confidence = 'none' THEN 1 ELSE 0 END) AS no_relationship,
-            SUM(CASE WHEN confidence = 'need_more_info' AND human_review IS NULL AND NOT expired THEN 1 ELSE 0 END) AS need_more_info,
-            SUM(CASE WHEN confidence != 'none' AND human_review IS NULL AND expired THEN 1 ELSE 0 END) AS expired_unreviewed
+            SUM(CASE WHEN human_review IS NULL AND confidence != 'none'
+                     AND NOT expired THEN 1 ELSE 0 END) AS queue,
+            SUM(CASE WHEN human_review = 'confirmed'
+                     AND NOT expired THEN 1 ELSE 0 END) AS confirmed_live
         FROM (
             SELECT cp.confidence, cp.human_review,
                    (COALESCE(ant.expected_expiration_time, '') != ''
@@ -735,7 +733,7 @@ def get_pair_stats(conn: sqlite3.Connection) -> dict:
         )""",
         (_now_utc(),),
     ).fetchone()
-    return dict(row)
+    return {k: row[k] or 0 for k in row.keys()}
 
 
 # ---------------------------------------------------------------------------
