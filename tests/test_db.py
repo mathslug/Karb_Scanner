@@ -179,6 +179,18 @@ def test_bulk_upsert_auto_confirm_preserves_existing_review(conn):
     assert row["human_review"] == "rejected"
 
 
+def test_bulk_upsert_code_version(conn):
+    db.upsert_tickers(conn, [_make_market(ticker="A"), _make_market(ticker="B")])
+    result = [{"ticker_a": "A", "ticker_b": "B", "confidence": "none"}]
+    db.bulk_upsert_pair_results(conn, result, "test-model", code_version="abc1234")
+    row = conn.execute("SELECT code_version FROM candidate_pairs").fetchone()
+    assert row["code_version"] == "abc1234"
+    # Re-screen updates it; omitting code_version stores NULL
+    db.bulk_upsert_pair_results(conn, result, "test-model")
+    row = conn.execute("SELECT code_version FROM candidate_pairs").fetchone()
+    assert row["code_version"] is None
+
+
 def test_bulk_upsert_without_auto_confirm_leaves_unreviewed(conn):
     db.upsert_tickers(conn, [_make_market(ticker="A"), _make_market(ticker="B")])
     db.bulk_upsert_pair_results(conn, [{

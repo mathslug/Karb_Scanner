@@ -54,7 +54,8 @@
   <p>
     <strong>Confidence:</strong> {% if pair.confidence == 'need_more_info' %}<mark style="background-color:#ff9">need more info</mark>{% else %}{{ pair.confidence }}{% endif %}<br>
     <strong>Model:</strong> {{ pair.llm_model or 'N/A' }}<br>
-    <strong>Screened:</strong> {{ pair.screened_at or 'N/A' }}
+    <strong>Screened:</strong> {{ pair.screened_at or 'N/A' }}<br>
+    <strong>Code version:</strong> {{ pair.code_version or 'N/A' }}
   </p>
   <p><strong>Reasoning:</strong> {{ pair.reasoning or 'N/A' }}</p>
 

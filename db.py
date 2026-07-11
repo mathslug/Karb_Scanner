@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS candidate_pairs (
     screened_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     human_review    TEXT CHECK(human_review IN ('confirmed','rejected') OR human_review IS NULL),
     reviewed_at     TEXT,
+    code_version    TEXT,
     UNIQUE(ticker_a, ticker_b)
 );
 
@@ -111,6 +112,7 @@ _MIGRATIONS = [
     "ALTER TABLE treasury_yields ADD COLUMN m1h REAL",
     "ALTER TABLE tickers ADD COLUMN sport_tag TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE tickers ADD COLUMN sub_sport TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE candidate_pairs ADD COLUMN code_version TEXT",
 ]
 
 _TABLE_REBUILDS = [
@@ -131,6 +133,7 @@ CREATE TABLE candidate_pairs_new (
     screened_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     human_review    TEXT CHECK(human_review IN ('confirmed','rejected') OR human_review IS NULL),
     reviewed_at     TEXT,
+    code_version    TEXT,
     UNIQUE(ticker_a, ticker_b)
 )""",
     ),
@@ -345,6 +348,7 @@ def bulk_upsert_pair_results(
     results: list[dict],
     model: str,
     auto_confirm_high: bool = False,
+    code_version: str | None = None,
 ) -> int:
     """Store LLM screening results (including 'none' confidence).
 
@@ -354,6 +358,9 @@ def bulk_upsert_pair_results(
     auto_confirm_high: mark 'high' results as human_review='confirmed' (used by
     the deterministic rule screener, whose verdicts don't need human review).
     An existing human review is never overwritten.
+
+    code_version: git commit of the screener code that produced these results,
+    stored alongside llm_model for provenance.
     """
     count = 0
     now = _now_utc()
@@ -366,8 +373,8 @@ def bulk_upsert_pair_results(
             """INSERT INTO candidate_pairs
                 (ticker_a, ticker_b, antecedent_ticker, consequent_ticker,
                  confidence, reasoning, llm_model, screened_at,
-                 human_review, reviewed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 human_review, reviewed_at, code_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker_a, ticker_b) DO UPDATE SET
                 antecedent_ticker = excluded.antecedent_ticker,
                 consequent_ticker = excluded.consequent_ticker,
@@ -376,13 +383,15 @@ def bulk_upsert_pair_results(
                 llm_model = excluded.llm_model,
                 screened_at = excluded.screened_at,
                 human_review = COALESCE(candidate_pairs.human_review, excluded.human_review),
-                reviewed_at = COALESCE(candidate_pairs.reviewed_at, excluded.reviewed_at)""",
+                reviewed_at = COALESCE(candidate_pairs.reviewed_at, excluded.reviewed_at),
+                code_version = excluded.code_version""",
             (
                 ta, tb,
                 ant, con,
                 r.get("confidence"), r.get("reasoning"),
                 model, now,
                 review, now if review else None,
+                code_version,
             ),
         )
         count += 1

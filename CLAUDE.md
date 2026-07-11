@@ -131,7 +131,7 @@ SQLite database (`slonk_arb.db` by default) with six tables:
 
 - **`tickers`** -- all market info fetched from Kalshi (ticker, series, event, title, prices, volume, sport_tag, sub_sport, timestamps). Primary key: `ticker`. Price columns are the "latest" cache, overwritten each scan. `sport_tag` stores the first tag from the series' `tags` array (e.g., "Tennis"). `sub_sport` is a derived field: for Football series, uses `event.product_metadata.competition` (e.g., "Pro Football", "College Football"); for all other sports, equals `sport_tag`.
 - **`prices`** -- append-only price history. One row per ticker per scan with `last_price`, `yes_ask`, `no_ask`, and `recorded_at` timestamp. Populated by `record_prices()` during each scan and when `evaluate.py` fetches pair orderbooks.
-- **`candidate_pairs`** -- screening results with `ticker_a`/`ticker_b` (always stored in sorted order), `antecedent_ticker`/`consequent_ticker`, confidence (`high`/`medium`/`low`/`need_more_info`/`none`), reasoning, and `human_review` (confirmed/rejected/NULL). `llm_model` records the screener: an Anthropic/OpenAI model name, or `rule-screener-v1` for deterministic lattice pairs.
+- **`candidate_pairs`** -- screening results with `ticker_a`/`ticker_b` (always stored in sorted order), `antecedent_ticker`/`consequent_ticker`, confidence (`high`/`medium`/`low`/`need_more_info`/`none`), reasoning, and `human_review` (confirmed/rejected/NULL). `llm_model` records the screener: an Anthropic/OpenAI model name, or `rule-screener-v1` for deterministic lattice pairs. `code_version` records the git commit (`git describe --always --dirty`) of the screener code that produced the decision; NULL on rows screened before tracking existed or when git is unavailable.
 - **`trade_evaluations`** -- append-only evaluation results per pair (orderbook snapshots, yields, costs, recommendation).
 - **`treasury_yields`** -- daily Treasury CMT yield curve data for discount rate calculations.
 - **`settings`** -- key/value app settings (`buffer_bps`, `borrow_rate_bps`), seeded by `get_connection()` and editable via the webapp settings page.
@@ -146,7 +146,7 @@ All take `conn: sqlite3.Connection` as first arg:
 - `record_prices(conn, markets)` -- append price snapshots to history table
 - `get_tickers_by_entity(conn, min_volume)` -- group active tickers by entity (2+ events)
 - `get_screened_pair_keys(conn)` -- set of already-evaluated pair keys
-- `bulk_upsert_pair_results(conn, results, model, auto_confirm_high=False)` -- store screening results; `auto_confirm_high` marks `high` results confirmed (rule screener)
+- `bulk_upsert_pair_results(conn, results, model, auto_confirm_high=False, code_version=None)` -- store screening results; `auto_confirm_high` marks `high` results confirmed (rule screener); `code_version` records the screener's git commit
 - `deactivate_missing_tickers(conn, active_tickers)` -- mark disappeared tickers inactive
 - `get_pairs_for_review(conn, status, exclude_expired=False)` -- fetch pairs for review UI (`unreviewed`/`confirmed`/`rejected`/`need_more_info`/`high_unreviewed`); `exclude_expired=True` drops pairs where either leg's `expected_expiration_time` has passed — the arb needs both markets open (used by the review queue and evaluate.py so resolved pairs retire instead of being shown/evaluated forever; legs with unknown expiration are treated as open)
 - `get_pair_detail(conn, pair_id)` -- full info for a single pair

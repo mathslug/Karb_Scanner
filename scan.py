@@ -11,9 +11,11 @@ review via the companion Flask webapp (app.py).
 """
 
 import argparse
+import functools
 import json
 import logging
 import os
+import subprocess
 import sys
 import time
 from itertools import combinations
@@ -28,6 +30,18 @@ from kalshi import KALSHI_BASE
 load_dotenv()
 
 log = logging.getLogger("scan")
+
+@functools.cache
+def code_version() -> str | None:
+    """Git commit of the running code (cached), or None if git is unavailable."""
+    try:
+        return subprocess.run(
+            ["git", "-C", os.path.dirname(os.path.abspath(__file__)),
+             "describe", "--always", "--dirty"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 # Filter values that map to a different Kalshi API tag (e.g. "Pro Football" -> "Football")
 _FILTER_TO_API_TAG = {
@@ -564,7 +578,9 @@ def screen_pairs_with_llm(
             # Write this batch's results to DB immediately
             if conn is not None:
                 batch_stored = results[results_start:]
-                db_mod.bulk_upsert_pair_results(conn, batch_stored, model)
+                db_mod.bulk_upsert_pair_results(
+                    conn, batch_stored, model, code_version=code_version(),
+                )
         except (ValueError, KeyError, requests.RequestException, anthropic.AnthropicError) as e:
             log.warning("Batch %d failed: %s", batch_num, e)
             print(f"    Warning: batch {batch_num} failed: {e}")
@@ -739,6 +755,7 @@ def main() -> None:
     if rule_results:
         db_mod.bulk_upsert_pair_results(
             conn, rule_results, RULE_SCREENER_MODEL, auto_confirm_high=True,
+            code_version=code_version(),
         )
         n_high = sum(1 for r in rule_results if r["confidence"] == "high")
         print(f"  Rule-screened {len(rule_results)} pairs "
