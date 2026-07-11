@@ -40,6 +40,7 @@
     <article>
       <p>The scanner finds Kalshi market pairs where one outcome logically implies another (e.g. "Alcaraz wins French Open" &rarr; "Alcaraz wins a Grand Slam"). Confirm candidates in the <a href="/review"><strong>Queue</strong></a>; confirmed pairs are evaluated against live orderbooks several times a day, and BUY recommendations are emailed to you automatically.</p>
     </article>
+    <p>Rules rejected: {{ stats.rules_rejected or 0 }} | LLM rejected: {{ stats.llm_rejected or 0 }} | Review rejected: {{ stats.review_rejected or 0 }} | Expired: {{ stats.expired or 0 }}</p>
     <p><small><a href="https://github.com/mathslug/Karb_Scanner" target="_blank">GitHub</a></small></p>
     {% endif %}
     {% endblock %}

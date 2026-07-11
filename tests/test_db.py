@@ -243,7 +243,8 @@ def _iso(days_from_now):
 
 
 def _seed_pair_with_expiration(conn, ticker_a, ticker_b, expiration,
-                               confidence="high", human_review=None):
+                               confidence="high", human_review=None,
+                               model="test-model"):
     """Seed a pair whose antecedent ticker has the given expiration."""
     db.upsert_tickers(conn, [
         _make_market(ticker=ticker_a, series_ticker="S1",
@@ -255,7 +256,7 @@ def _seed_pair_with_expiration(conn, ticker_a, ticker_b, expiration,
         "ticker_a": ticker_a, "ticker_b": ticker_b,
         "antecedent_ticker": ticker_a, "consequent_ticker": ticker_b,
         "confidence": confidence, "reasoning": "test",
-    }], "test-model")
+    }], model)
     pair_id = conn.execute(
         "SELECT id FROM candidate_pairs ORDER BY id DESC LIMIT 1"
     ).fetchone()["id"]
@@ -355,6 +356,32 @@ def test_get_pair_stats_excludes_expired(conn):
     stats = db.get_pair_stats(conn)
     assert stats["queue"] == 1  # matches the review queue
     assert stats["confirmed_live"] == 0
+    assert stats["expired"] == 2  # any status counts
+
+
+def test_get_pair_stats_rejected_breakdown(conn):
+    _seed_pair_with_expiration(conn, "A", "B", _iso(30), confidence="none",
+                               model="rule-screener-v1")
+    _seed_pair_with_expiration(conn, "C", "D", _iso(30), confidence="none")
+    _seed_pair_with_expiration(conn, "E", "F", _iso(30), confidence="high",
+                               human_review="rejected")
+    # Expired 'none' pairs count only toward expired
+    _seed_pair_with_expiration(conn, "G", "H", _iso(-5), confidence="none",
+                               model="rule-screener-v1")
+    stats = db.get_pair_stats(conn)
+    assert stats["rules_rejected"] == 1
+    assert stats["llm_rejected"] == 1
+    assert stats["review_rejected"] == 1
+    assert stats["expired"] == 1
+
+
+def test_get_pair_stats_human_rejection_wins_over_none(conn):
+    # A human-rejected 'none' pair counts as review_rejected, not llm_rejected
+    _seed_pair_with_expiration(conn, "A", "B", _iso(30), confidence="none",
+                               human_review="rejected")
+    stats = db.get_pair_stats(conn)
+    assert stats["review_rejected"] == 1
+    assert stats["llm_rejected"] == 0
 
 
 # ── settings ─────────────────────────────────────────────────────────────────
