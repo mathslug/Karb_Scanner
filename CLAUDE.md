@@ -78,7 +78,7 @@ SLONK_DB=my.db uv run app.py                       # custom DB path
 
 ### CLI args -- scan.py
 - `--filter` / `-f` -- comma-separated sport/competition names to filter (e.g. "tennis", "tennis,hockey", "tennis,pro football"). Values map to `sub_sport` for local entity filtering; special values like "pro football" and "college football" are translated to the correct Kalshi API tag ("Football") for fetching.
-- `--model` -- LLM model name (default: `claude-sonnet-4-6`; production cron passes the orchestrator-provided `$LLM_MODEL`, e.g. `gpt-oss:120b` for Ollama)
+- `--model` -- LLM model name (default: `claude-sonnet-5`; production cron passes the orchestrator-provided `$LLM_MODEL`, e.g. `gpt-oss:120b` for Ollama)
 - `--min-volume` -- exclude markets below this volume (default: 200)
 - `--batch-size` -- pairs per LLM call (default: 12)
 - `--category` -- Kalshi category (default: Sports)

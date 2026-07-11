@@ -399,12 +399,14 @@ def format_pair_for_llm(idx: int, a: dict, b: dict) -> str:
 def _call_anthropic(prompt: str, model: str) -> str:
     """Call Anthropic Messages API."""
     client = anthropic.Anthropic()
+    # Sonnet 5 runs adaptive thinking by default; max_tokens covers thinking
+    # plus the JSON response, and the text block may not be content[0].
     response = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=16000,
         messages=[{"role": "user", "content": prompt}],
     )
-    return response.content[0].text
+    return next(b.text for b in response.content if b.type == "text")
 
 
 def _call_openai_compat(prompt: str, model: str, base_url: str) -> str:
@@ -673,8 +675,8 @@ def main() -> None:
     )
     # LLM options
     parser.add_argument(
-        "--model", default="claude-sonnet-4-6",
-        help="Anthropic model name (default: claude-sonnet-4-6)",
+        "--model", default="claude-sonnet-5",
+        help="Anthropic model name (default: claude-sonnet-5)",
     )
     parser.add_argument(
         "--batch-size", type=int, default=12,
