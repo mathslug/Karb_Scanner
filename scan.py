@@ -34,9 +34,12 @@ log = logging.getLogger("scan")
 @functools.cache
 def code_version() -> str | None:
     """Git commit of the running code (cached), or None if git is unavailable."""
+    code_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         return subprocess.run(
-            ["git", "-C", os.path.dirname(os.path.abspath(__file__)),
+            # -c safe.directory: production cron runs as a different user than
+            # the repo owner; without it git refuses with "dubious ownership".
+            ["git", "-C", code_dir, "-c", f"safe.directory={code_dir}",
              "describe", "--always", "--dirty"],
             capture_output=True, text=True, timeout=5, check=True,
         ).stdout.strip() or None
