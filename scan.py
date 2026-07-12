@@ -337,50 +337,115 @@ def rule_screen_pairs(pairs: list[tuple[dict, dict]]) -> tuple[list[dict], list[
 
 # ── LLM screening ───────────────────────────────────────────────────────────
 
+def pair_signature(a: dict, b: dict) -> tuple:
+    """Structural identity of a pair: the (series, event) of both legs, sorted.
+
+    Two pairs with the same signature ask the same logical question about
+    different entities ("X wins USO -> X wins a Slam" for X = Sinner or
+    Zverev), so a screening verdict transfers between them.
+    """
+    return tuple(sorted([(a["series_ticker"], a["event_ticker"]),
+                         (b["series_ticker"], b["event_ticker"])]))
+
+
+def reuse_screen_pairs(
+    pairs: list[tuple[dict, dict]], sig_verdicts: dict,
+) -> tuple[list[dict], list[tuple[dict, dict]]]:
+    """Split pairs into (reused_results, remaining) using stored verdicts
+    for structurally identical pairs (see get_signature_verdicts).
+
+    Reused results carry the source pair's confidence and direction (mapped
+    onto this pair's tickers by series+event), plus provenance in reasoning,
+    the source's llm_model, and whether the source was human-confirmed.
+    """
+    reused, remaining = [], []
+    for a, b in pairs:
+        v = sig_verdicts.get(pair_signature(a, b))
+        if v is None:
+            remaining.append((a, b))
+            continue
+        r = {
+            "ticker_a": a["ticker"], "ticker_b": b["ticker"],
+            "confidence": v["confidence"],
+            "reasoning": f"[structural reuse of {v['src_ticker_a']}/{v['src_ticker_b']}] {v['reasoning']}",
+            "llm_model": v["llm_model"], "confirmed": v["confirmed"],
+        }
+        if v["antecedent_se"] is not None:
+            if (a["series_ticker"], a["event_ticker"]) == v["antecedent_se"]:
+                r["antecedent_ticker"], r["consequent_ticker"] = a["ticker"], b["ticker"]
+            else:
+                r["antecedent_ticker"], r["consequent_ticker"] = b["ticker"], a["ticker"]
+        reused.append(r)
+    return reused, remaining
+
+
+def store_reused_results(conn, reused: list[dict], cv: str | None) -> None:
+    """Store reused results, preserving each source's llm_model and
+    auto-confirming high verdicts whose source structure a human confirmed."""
+    groups: dict[tuple, list[dict]] = {}
+    for r in reused:
+        groups.setdefault((r.pop("llm_model"), r.pop("confirmed")), []).append(r)
+    for (model, confirmed), rs in groups.items():
+        db_mod.bulk_upsert_pair_results(
+            conn, rs, model, auto_confirm_high=confirmed, code_version=cv,
+        )
+
+
 SCREENING_PROMPT = """\
-For each pair of events below, determine if one event logically NECESSITATES the other. Check both directions.
+You will judge pairs of prediction-market events for LOGICAL implication.
 
-"A implies B" means: if A resolves YES, then B MUST ALSO resolve YES as a matter of logical necessity — not probability, correlation, or likelihood. The implication must hold in every possible scenario.
+"A implies B" means: in every possible scenario where A resolves YES, B must also resolve YES by the rules of the competition — not by probability or form. If any legal scenario makes A YES and B NO, there is no implication. Check both directions.
 
-Examples of TRUE implications:
-- "Player X wins the French Open" → "Player X wins a Grand Slam" (the French Open IS a Grand Slam)
-- "Team Y wins the Super Bowl" → "Team Y wins the AFC/NFC Championship" (must win conference to reach Super Bowl)
-- "Team Y wins the Super Bowl" → "Team Y makes the playoffs" (must make playoffs to win)
+Calibration:
+- "X wins the French Open" implies "X wins a Grand Slam this year" (the French Open is a Grand Slam). The reverse does NOT hold — X could have won a different Slam.
+- "Team wins the title" implies "team wins its conference/semifinal" only when the competition format makes that stage unavoidable.
+- "X leads after Round 3" does NOT imply "X finishes top 10": a final-round collapse, withdrawal, or disqualification is possible. Near-certainty is not implication.
+- Events from different tournaments almost never imply each other.
 
-Note: the implication can go in EITHER direction. "Player X wins a tennis major" does NOT imply "Player X wins the French Open" — could win a different major. But reversed: "Player X wins the French Open" DOES imply "Player X wins a major". Always check BOTH directions.
-
-Examples of FALSE implications:
-- "Team Y wins the AFC Championship" → "Team Y wins the Super Bowl" ✗ (they could LOSE the Super Bowl)
-- "Team Y wins their division" → "Team Y wins the championship" ✗ (could lose in playoffs)
-- "Team Y wins the championship" → "Team Y wins their division" ✗ (wild card teams exist)
-- "Player X leads in stats" → "Player X wins MVP" ✗ (correlation, not necessity)
-
-Return a JSON object (no markdown fencing) with a "results" key containing one object per pair:
+Return JSON only (no markdown fencing), one result per pair, in input order:
 {"results": [
-  {
-    "ticker_a": "Event A ticker (copied exactly from input)",
-    "ticker_b": "Event B ticker (copied exactly from input)",
-    "antecedent_ticker": "..." or null,
-    "consequent_ticker": "..." or null,
-    "confidence": "high" | "medium" | "low" | "none" | "need_more_info",
-    "reasoning": "short explanation"
-  }
+  {"ticker_a": "<copied exactly from Event A>",
+   "ticker_b": "<copied exactly from Event B>",
+   "implication": "a_implies_b" | "b_implies_a" | "none" | "unclear",
+   "confidence": "high" | "medium" | "low",
+   "reasoning": "one short sentence"}
 ]}
 
-IMPORTANT: "ticker_a" and "ticker_b" MUST be copied exactly from the Event A and Event B tickers shown in each pair.
-
-Confidence levels:
-- "high": the implication is a logical certainty based on the rules of the sport/competition
-- "medium": the implication is very likely logically necessary but depends on specific rule interpretations
-- "low": there may be an implication but it's unclear — err toward inclusion
-- "need_more_info": the events MIGHT be logically dependent but you cannot determine the relationship without additional context (e.g., depends on tournament brackets, contingencies, or ambiguous rules)
-- "none": no implication in either direction — set antecedent_ticker and consequent_ticker to null
-
-"antecedent_ticker" is the event that IMPLIES the other (if this is YES, the other MUST be YES).
-"consequent_ticker" is the event that is IMPLIED (necessarily YES when the antecedent is YES).
+Field meanings:
+- "implication" is your verdict; expect "none" for most pairs. Use "unclear" only when the market rules are too ambiguous to decide.
+- "confidence" grades the implication itself, never your certainty in a "none" verdict: "high" = guaranteed by the rules of the sport; "medium" = holds unless rules are interpreted unusually; "low" = plausible but shaky. For "none"/"unclear", confidence is ignored.
 
 CANDIDATE PAIRS:
 """
+
+
+def _normalize_result(r: dict) -> dict:
+    """Map the prompt's verdict schema (implication + confidence) onto the
+    stored schema (confidence + antecedent/consequent tickers).
+
+    The old schema overloaded "confidence" as both verdict and certainty,
+    which let the model answer "high" meaning "highly confident there is NO
+    implication" — a false positive that flows straight into evaluation.
+    Verdict and certainty are now separate fields.
+    """
+    imp = r.get("implication")
+    if imp is None:
+        return r  # already in stored schema
+    if imp in ("a_implies_b", "b_implies_a"):
+        ra, rb = r.get("ticker_a"), r.get("ticker_b")
+        if imp == "a_implies_b":
+            r["antecedent_ticker"], r["consequent_ticker"] = ra, rb
+        else:
+            r["antecedent_ticker"], r["consequent_ticker"] = rb, ra
+        if r.get("confidence") not in ("high", "medium", "low"):
+            r["confidence"] = "low"
+    elif imp == "unclear":
+        r["confidence"] = "need_more_info"
+        r["antecedent_ticker"] = r["consequent_ticker"] = None
+    else:  # "none" or anything unrecognized
+        r["confidence"] = "none"
+        r["antecedent_ticker"] = r["consequent_ticker"] = None
+    return r
 
 
 def format_pair_for_llm(idx: int, a: dict, b: dict) -> str:
@@ -472,11 +537,32 @@ def _extract_json(text: str) -> list[dict]:
                 parsed = parsed[key]
                 break
         else:
-            if "antecedent_ticker" in parsed:
+            if "antecedent_ticker" in parsed or "implication" in parsed:
                 parsed = [parsed]
     if not isinstance(parsed, list) or not all(isinstance(r, dict) for r in parsed):
         raise ValueError("unrecognized LLM response shape")
     return parsed
+
+
+def _fanout_result(r: dict, rep: tuple[dict, dict], sib: tuple[dict, dict]) -> dict:
+    """Copy a representative pair's verdict onto a structural sibling,
+    mapping the antecedent side by (series, event) identity."""
+    ra, rb = rep
+    sa, sb = sib
+    out = {
+        "ticker_a": sa["ticker"], "ticker_b": sb["ticker"],
+        "confidence": r.get("confidence"),
+        "reasoning": f"[structural reuse of {ra['ticker']}/{rb['ticker']}] {r.get('reasoning', '')}",
+    }
+    ant = r.get("antecedent_ticker")
+    if ant and r.get("confidence") not in ("none", "need_more_info"):
+        ant_leg = ra if ra["ticker"] == ant else rb
+        ant_se = (ant_leg["series_ticker"], ant_leg["event_ticker"])
+        if (sa["series_ticker"], sa["event_ticker"]) == ant_se:
+            out["antecedent_ticker"], out["consequent_ticker"] = sa["ticker"], sb["ticker"]
+        else:
+            out["antecedent_ticker"], out["consequent_ticker"] = sb["ticker"], sa["ticker"]
+    return out
 
 
 def screen_pairs_with_llm(
@@ -491,13 +577,25 @@ def screen_pairs_with_llm(
     they can be stored in the DB to avoid re-screening. Each result dict
     includes ticker_a/ticker_b from the input pair.
 
+    Structurally identical pairs (same series+event on both legs, different
+    entity) are deduplicated: one representative per signature goes to the
+    LLM and its verdict fans out to the siblings.
+
     If conn is provided, writes results to the DB after each batch.
     """
-    results = []
-    total_batches = (len(pairs) + batch_size - 1) // batch_size
+    by_sig: dict[tuple, list[tuple[dict, dict]]] = {}
+    for p in pairs:
+        by_sig.setdefault(pair_signature(*p), []).append(p)
+    reps = [group[0] for group in by_sig.values()]
+    siblings = {(g[0][0]["ticker"], g[0][1]["ticker"]): g[1:] for g in by_sig.values()}
+    if len(reps) < len(pairs):
+        print(f"  Structural dedup: {len(pairs)} pairs -> {len(reps)} unique structures")
 
-    for batch_idx in range(0, len(pairs), batch_size):
-        batch = pairs[batch_idx : batch_idx + batch_size]
+    results = []
+    total_batches = (len(reps) + batch_size - 1) // batch_size
+
+    for batch_idx in range(0, len(reps), batch_size):
+        batch = reps[batch_idx : batch_idx + batch_size]
         batch_num = batch_idx // batch_size + 1
         print(f"  LLM batch {batch_num}/{total_batches} ({len(batch)} pairs)...", flush=True)
 
@@ -521,6 +619,7 @@ def screen_pairs_with_llm(
             accepted, rejected, unmatched_count = 0, 0, 0
 
             for r in batch_results:
+                _normalize_result(r)
                 ra = r.get("ticker_a", "")
                 rb = r.get("ticker_b", "")
 
@@ -570,6 +669,14 @@ def screen_pairs_with_llm(
                              conf, r.get("reasoning", ""))
                     rejected += 1
                 results.append(r)
+
+                # Fan the verdict out to structural siblings of this pair
+                rep_pair = batch_lookup[key]
+                for sib_pair in siblings.get(key, ()):
+                    sib_r = _fanout_result(r, rep_pair, sib_pair)
+                    log.info("REUSED (%s): %s / %s [%s]", key[0], sib_r["ticker_a"],
+                             sib_r["ticker_b"], sib_r["confidence"])
+                    results.append(sib_r)
 
             # Warn about input pairs with no LLM result
             unresulted = set(batch_lookup.keys()) - matched_keys
@@ -766,6 +873,17 @@ def main() -> None:
         print(f"  Rule-screened {len(rule_results)} pairs "
               f"({n_high} high auto-confirmed, {len(rule_results) - n_high} none) — no LLM tokens")
         log.info("Rule-screened %d pairs (%d high)", len(rule_results), n_high)
+
+    # ── Structural reuse: inherit stored verdicts for known structures ───
+    if pairs and not args.rescan:
+        reused, pairs = reuse_screen_pairs(pairs, db_mod.get_signature_verdicts(conn))
+        if reused:
+            n_conf = sum(1 for r in reused
+                         if r["confirmed"] and r["confidence"] == "high")
+            store_reused_results(conn, reused, code_version())
+            print(f"  Structural reuse: {len(reused)} pairs inherited stored verdicts "
+                  f"({n_conf} auto-confirmed from human review) — no LLM tokens")
+            log.info("Structural reuse: %d pairs, %d auto-confirmed", len(reused), n_conf)
 
     if not pairs:
         print("No pairs left for LLM screening.")

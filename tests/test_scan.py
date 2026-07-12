@@ -379,3 +379,129 @@ def test_filter_mixed_entity_no_cross_sport_pairs():
     assert len(pairs) == 1
     tickers = {pairs[0][0]["ticker"], pairs[0][1]["ticker"]}
     assert tickers == {"NHL1-DEN", "NHL2-DEN"}
+
+
+# ── result normalization (verdict schema → stored schema) ────────────────────
+
+import json
+
+from scan import (
+    _fanout_result,
+    _normalize_result,
+    pair_signature,
+    reuse_screen_pairs,
+    screen_pairs_with_llm,
+)
+
+
+def test_normalize_a_implies_b():
+    r = _normalize_result({"ticker_a": "A", "ticker_b": "B",
+                           "implication": "a_implies_b", "confidence": "high"})
+    assert r["antecedent_ticker"] == "A" and r["consequent_ticker"] == "B"
+    assert r["confidence"] == "high"
+
+
+def test_normalize_b_implies_a():
+    r = _normalize_result({"ticker_a": "A", "ticker_b": "B",
+                           "implication": "b_implies_a", "confidence": "medium"})
+    assert r["antecedent_ticker"] == "B" and r["consequent_ticker"] == "A"
+
+
+def test_normalize_none_ignores_confidence():
+    # the old schema's failure mode: "high" attached to a no-implication verdict
+    r = _normalize_result({"ticker_a": "A", "ticker_b": "B",
+                           "implication": "none", "confidence": "high"})
+    assert r["confidence"] == "none"
+    assert r["antecedent_ticker"] is None and r["consequent_ticker"] is None
+
+
+def test_normalize_unclear():
+    r = _normalize_result({"ticker_a": "A", "ticker_b": "B", "implication": "unclear"})
+    assert r["confidence"] == "need_more_info"
+
+
+def test_normalize_missing_confidence_defaults_low():
+    r = _normalize_result({"ticker_a": "A", "ticker_b": "B", "implication": "a_implies_b"})
+    assert r["confidence"] == "low"
+
+
+def test_normalize_passthrough_old_schema():
+    r = _normalize_result({"ticker_a": "A", "ticker_b": "B", "confidence": "high",
+                           "antecedent_ticker": "A", "consequent_ticker": "B"})
+    assert r["confidence"] == "high" and r["antecedent_ticker"] == "A"
+
+
+# ── structural reuse ─────────────────────────────────────────────────────────
+
+
+def test_pair_signature_order_independent():
+    a = _market("T1", "FO", event="FO-26")
+    b = _market("T2", "GS", event="GS-26")
+    assert pair_signature(a, b) == pair_signature(b, a)
+
+
+def test_reuse_screen_pairs_maps_direction():
+    verdicts = {
+        (("FO", "FO-26"), ("GS", "GS-26")): {
+            "confidence": "high", "antecedent_se": ("FO", "FO-26"),
+            "reasoning": "src reasoning", "llm_model": "test-model",
+            "src_ticker_a": "FO-26-X", "src_ticker_b": "GS-26-X",
+            "confirmed": True},
+    }
+    a = _market("FO-26-Y", "FO", event="FO-26")
+    b = _market("GS-26-Y", "GS", event="GS-26")
+    for pair in [(a, b), (b, a)]:  # either leg order maps ant to the FO leg
+        reused, remaining = reuse_screen_pairs([pair], verdicts)
+        assert remaining == []
+        r = reused[0]
+        assert r["antecedent_ticker"] == "FO-26-Y"
+        assert r["consequent_ticker"] == "GS-26-Y"
+        assert r["confidence"] == "high" and r["confirmed"]
+        assert "structural reuse" in r["reasoning"]
+
+
+def test_reuse_screen_pairs_none_verdict_has_no_direction():
+    verdicts = {
+        (("FO", "FO-26"), ("R1", "R1-26")): {
+            "confidence": "none", "antecedent_se": None,
+            "reasoning": "unrelated", "llm_model": "test-model",
+            "src_ticker_a": "FO-26-X", "src_ticker_b": "R1-26-X",
+            "confirmed": False},
+    }
+    a = _market("FO-26-Y", "FO", event="FO-26")
+    b = _market("R1-26-Y", "R1", event="R1-26")
+    reused, remaining = reuse_screen_pairs([(a, b)], verdicts)
+    assert remaining == [] and reused[0]["confidence"] == "none"
+    assert "antecedent_ticker" not in reused[0]
+
+
+def test_reuse_screen_pairs_unknown_structure_passes_through():
+    a = _market("T1", "FO", event="FO-26")
+    b = _market("T2", "GS", event="GS-26")
+    reused, remaining = reuse_screen_pairs([(a, b)], {})
+    assert reused == [] and remaining == [(a, b)]
+
+
+@patch("scan._call_llm")
+def test_screen_dedup_fans_out(mock_llm):
+    a1 = _market("FO-26-X", "FO", event="FO-26", entity="X")
+    b1 = _market("GS-26-X", "GS", event="GS-26", entity="X")
+    a2 = _market("FO-26-Y", "FO", event="FO-26", entity="Y")
+    b2 = _market("GS-26-Y", "GS", event="GS-26", entity="Y")
+    c1 = _market("R1-26-X", "R1", event="R1-26", entity="X")
+    mock_llm.return_value = json.dumps({"results": [
+        {"ticker_a": "FO-26-X", "ticker_b": "GS-26-X",
+         "implication": "a_implies_b", "confidence": "high",
+         "reasoning": "fo is a slam"},
+        {"ticker_a": "GS-26-X", "ticker_b": "R1-26-X",
+         "implication": "none", "reasoning": "unrelated"},
+    ]})
+    results = screen_pairs_with_llm([(a1, b1), (a2, b2), (b1, c1)], "test-model")
+    assert mock_llm.call_count == 1  # 3 pairs, 2 unique structures, 1 batch
+    assert len(results) == 3
+    by_key = {(r["ticker_a"], r["ticker_b"]): r for r in results}
+    sib = by_key[("FO-26-Y", "GS-26-Y")]
+    assert sib["confidence"] == "high"
+    assert sib["antecedent_ticker"] == "FO-26-Y"
+    assert sib["consequent_ticker"] == "GS-26-Y"
+    assert "structural reuse" in sib["reasoning"]

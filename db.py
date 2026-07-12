@@ -345,6 +345,68 @@ def sorted_key(pair: tuple[dict, dict]) -> tuple[str, str]:
     return _sorted_pair(pair[0]["ticker"], pair[1]["ticker"])
 
 
+def get_signature_verdicts(conn: sqlite3.Connection) -> dict:
+    """Map each screened pair structure to its verdict, where unanimous.
+
+    A signature is the sorted ((series, event), (series, event)) of a pair's
+    legs; pairs sharing one ask the same logical question about different
+    entities. Returns {signature: {confidence, antecedent_se, reasoning,
+    llm_model, src_ticker_a, src_ticker_b, confirmed}} for signatures whose
+    screened rows all agree. Human review outranks the stored verdict: a
+    rejected row counts as 'none', a confirmed row flags the verdict as
+    human-approved. Signatures with conflicting or need_more_info rows are
+    omitted — those structures go (back) to the LLM.
+    """
+    rows = conn.execute(
+        """SELECT cp.ticker_a, cp.ticker_b, cp.antecedent_ticker,
+                  cp.confidence, cp.reasoning, cp.llm_model, cp.human_review,
+                  cp.screened_at,
+                  ta.series_ticker AS sa, ta.event_ticker AS ea,
+                  tb.series_ticker AS sb, tb.event_ticker AS eb
+           FROM candidate_pairs cp
+           JOIN tickers ta ON ta.ticker = cp.ticker_a
+           JOIN tickers tb ON tb.ticker = cp.ticker_b"""
+    ).fetchall()
+
+    sigs: dict[tuple, dict] = {}
+    for r in rows:
+        key = tuple(sorted([(r["sa"], r["ea"]), (r["sb"], r["eb"])]))
+        if r["human_review"] == "rejected":
+            verdict = ("none", None)
+        elif r["confidence"] in ("high", "medium", "low"):
+            ant_se = ((r["sa"], r["ea"]) if r["antecedent_ticker"] == r["ticker_a"]
+                      else (r["sb"], r["eb"]))
+            verdict = (r["confidence"], ant_se)
+        elif r["confidence"] == "none":
+            verdict = ("none", None)
+        else:  # need_more_info or missing: structure unclear, never reuse
+            verdict = ("__unclear__", None)
+        e = sigs.setdefault(key, {"verdicts": set(), "src": None,
+                                  "confirmed": False, "t": ""})
+        e["verdicts"].add(verdict)
+        if r["human_review"] == "confirmed":
+            e["confirmed"] = True
+        if (r["screened_at"] or "") >= e["t"]:
+            e["t"] = r["screened_at"] or ""
+            e["src"] = r
+
+    out = {}
+    for key, e in sigs.items():
+        if len(e["verdicts"]) != 1:
+            continue
+        (conf, ant_se), = e["verdicts"]
+        if conf == "__unclear__":
+            continue
+        src = e["src"]
+        out[key] = {
+            "confidence": conf, "antecedent_se": ant_se,
+            "reasoning": src["reasoning"] or "", "llm_model": src["llm_model"],
+            "src_ticker_a": src["ticker_a"], "src_ticker_b": src["ticker_b"],
+            "confirmed": e["confirmed"],
+        }
+    return out
+
+
 def bulk_upsert_pair_results(
     conn: sqlite3.Connection,
     results: list[dict],

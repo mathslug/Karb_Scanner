@@ -106,7 +106,10 @@ Fetch series for category (filtered by API tags if --filter) -> Fetch events + n
   -> Generate candidate pairs per entity (reject cross-sub_sport pairs + blocklisted/numeric entities)
   -> Filter out already-screened pairs (unless --rescan)
   -> Rule screener decides deterministic pairs for free (finish-position lattices)
-  -> LLM screens each remaining pair for logical implication (A YES -> B YES?)
+  -> Structural reuse: pairs whose (series, event) signature matches an already-decided
+     structure inherit that verdict (skipped with --rescan)
+  -> LLM screens one representative per remaining structure; verdict fans out to
+     structurally identical siblings
   -> Store ALL results in DB (including "none" and "need_more_info" confidence)
   -> Print terminal summary
 ```
@@ -124,6 +127,12 @@ Before any LLM call, `rule_screen_pairs()` decides pairs whose answer is determi
 Two backends, selected by env var: without `LLM_BASE_URL` (production default), scan.py calls the Anthropic API directly (requires `ANTHROPIC_API_KEY`). With `LLM_BASE_URL` set, it POSTs to `{LLM_BASE_URL}/v1/chat/completions` (OpenAI-compatible; Bearer auth via `LLM_API_KEY`) — the on-standby GPU path: an ephemeral MI300X droplet running Ollama `gpt-oss:120b` (see `gpu_droplet.py`; `dedicated.py` is the managed alternative), billed per GPU-hour to the DO account. Both GPU orchestrators are currently blocked on DO account quotas.
 
 The prompt requests `ticker_a`/`ticker_b` echo-back fields so results are matched to input pairs by ticker rather than array index — prevents silent data corruption if the LLM skips, reorders, or merges results. A failed batch (API error, malformed JSON) is logged and skipped; its pairs stay unscreened and are retried on the next run.
+
+The response schema separates the **verdict** (`implication`: `a_implies_b`/`b_implies_a`/`none`/`unclear`) from **certainty** (`confidence`: `high`/`medium`/`low`); `_normalize_result()` maps this onto the stored schema (confidence + antecedent/consequent). The previous schema overloaded `confidence` as both verdict and certainty, which let the model answer "high" meaning "highly confident there is NO implication" — observed in production as batches of false-positive highs whose own reasoning denied any implication (benchmark: old prompt 36/48, new prompt 144/144 on structurally-labeled pairs).
+
+### Structural reuse
+
+Pairs sharing a **signature** — the sorted ((series, event), (series, event)) of their two legs — ask the same logical question about different entities ("Sinner wins USO -> Sinner wins a Slam" vs the Zverev equivalent), so verdicts transfer. Two layers, both in scan.py: (1) *cross-run*: `get_signature_verdicts()` maps every already-screened structure to its verdict where rows are unanimous (human rejection counts as `none`, `need_more_info` or conflicting rows disqualify the structure); `reuse_screen_pairs()` applies these before any LLM call, and high verdicts whose source structure a human confirmed are auto-confirmed. (2) *within-run*: `screen_pairs_with_llm()` sends one representative per signature to the LLM and fans the verdict out to siblings. Reused rows carry a `[structural reuse of <src pair>]` reasoning prefix and the source's `llm_model`. Replayed on July 11-12 production data: 745 pair-screenings -> 160 (79% saved).
 
 ## Database
 
@@ -146,6 +155,7 @@ All take `conn: sqlite3.Connection` as first arg:
 - `record_prices(conn, markets)` -- append price snapshots to history table
 - `get_tickers_by_entity(conn, min_volume)` -- group active tickers by entity (2+ events)
 - `get_screened_pair_keys(conn)` -- set of already-evaluated pair keys
+- `get_signature_verdicts(conn)` -- map of pair structure ((series, event) of both legs) to unanimous screening verdict, for structural reuse
 - `bulk_upsert_pair_results(conn, results, model, auto_confirm_high=False, code_version=None)` -- store screening results; `auto_confirm_high` marks `high` results confirmed (rule screener); `code_version` records the screener's git commit
 - `deactivate_missing_tickers(conn, active_tickers)` -- mark disappeared tickers inactive
 - `get_pairs_for_review(conn, status, exclude_expired=False)` -- fetch pairs for review UI (`unreviewed`/`confirmed`/`rejected`/`need_more_info`/`high_unreviewed`); rows carry `arb_cost` (raw ask sum), `est_fees`, and an estimated post-fee `annualized_yield`/`excess_yield` (top-of-book, at-size estimate — the evaluator's stored numbers are authoritative); `exclude_expired=True` drops pairs where either leg's `expected_expiration_time` has passed — the arb needs both markets open (used by the review queue and evaluate.py so resolved pairs retire instead of being shown/evaluated forever; legs with unknown expiration are treated as open)

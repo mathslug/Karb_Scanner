@@ -536,3 +536,61 @@ def test_compute_hurdle_yield_none_days(conn):
 
 def test_compute_hurdle_yield_zero_days(conn):
     assert db.compute_hurdle_yield(conn, 0) is None
+
+
+# ── get_signature_verdicts ───────────────────────────────────────────────────
+
+
+def _mk_se(t, s, e):
+    return _make_market(ticker=t, series_ticker=s, event_ticker=e)
+
+
+def test_get_signature_verdicts_unanimous(conn):
+    db.upsert_tickers(conn, [
+        _mk_se("FO-X", "FO", "FO-26"), _mk_se("GS-X", "GS", "GS-26"),
+        _mk_se("A-X", "A", "A-26"), _mk_se("B-X", "B", "B-26"),
+        _mk_se("A-Y", "A", "A-26"), _mk_se("B-Y", "B", "B-26"),
+        _mk_se("C-X", "C", "C-26"), _mk_se("D-X", "D", "D-26"),
+    ])
+    db.bulk_upsert_pair_results(conn, [
+        {"ticker_a": "FO-X", "ticker_b": "GS-X", "antecedent_ticker": "FO-X",
+         "consequent_ticker": "GS-X", "confidence": "high", "reasoning": "r1"},
+        # conflicting signature: one high, one none — must be omitted
+        {"ticker_a": "A-X", "ticker_b": "B-X", "antecedent_ticker": "A-X",
+         "consequent_ticker": "B-X", "confidence": "high", "reasoning": "r2"},
+        {"ticker_a": "A-Y", "ticker_b": "B-Y", "confidence": "none", "reasoning": "r3"},
+        # need_more_info: never reused
+        {"ticker_a": "C-X", "ticker_b": "D-X", "confidence": "need_more_info",
+         "reasoning": "r4"},
+    ], "test-model")
+    v = db.get_signature_verdicts(conn)
+    key = tuple(sorted([("FO", "FO-26"), ("GS", "GS-26")]))
+    assert v[key]["confidence"] == "high"
+    assert v[key]["antecedent_se"] == ("FO", "FO-26")
+    assert v[key]["llm_model"] == "test-model"
+    assert not v[key]["confirmed"]
+    assert tuple(sorted([("A", "A-26"), ("B", "B-26")])) not in v
+    assert tuple(sorted([("C", "C-26"), ("D", "D-26")])) not in v
+
+
+def test_get_signature_verdicts_human_review(conn):
+    db.upsert_tickers(conn, [
+        _mk_se("FO-X", "FO", "FO-26"), _mk_se("GS-X", "GS", "GS-26"),
+        _mk_se("P-X", "P", "P-26"), _mk_se("Q-X", "Q", "Q-26"),
+    ])
+    db.bulk_upsert_pair_results(conn, [
+        {"ticker_a": "FO-X", "ticker_b": "GS-X", "antecedent_ticker": "FO-X",
+         "consequent_ticker": "GS-X", "confidence": "high", "reasoning": "ok"},
+        {"ticker_a": "P-X", "ticker_b": "Q-X", "antecedent_ticker": "P-X",
+         "consequent_ticker": "Q-X", "confidence": "high", "reasoning": "wrong"},
+    ], "test-model")
+    ids = {(r["ticker_a"], r["ticker_b"]): r["id"] for r in
+           conn.execute("SELECT id, ticker_a, ticker_b FROM candidate_pairs")}
+    db.set_review(conn, ids[("FO-X", "GS-X")], "confirmed")
+    db.set_review(conn, ids[("P-X", "Q-X")], "rejected")
+    v = db.get_signature_verdicts(conn)
+    fo = v[tuple(sorted([("FO", "FO-26"), ("GS", "GS-26")]))]
+    assert fo["confidence"] == "high" and fo["confirmed"]
+    pq = v[tuple(sorted([("P", "P-26"), ("Q", "Q-26")]))]
+    # human rejection outranks the stored high verdict
+    assert pq["confidence"] == "none" and pq["antecedent_se"] is None
