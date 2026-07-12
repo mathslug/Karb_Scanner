@@ -1,4 +1,4 @@
-"""Tests for evaluate_pair — binary search, yield calc, buy/pass logic.
+"""Tests for evaluate_pair — contract-size scan, yield calc, buy/pass logic.
 
 Uses synthetic orderbooks patched over fetch_pair_books to avoid network I/O.
 """
@@ -71,11 +71,11 @@ def test_pass_expensive_pair(mock_books):
     assert result["recommendation"] == "pass"
 
 
-# ── Binary search finds optimal n with degrading depth ───────────────────────
+# ── Sizing finds optimal n with degrading depth ──────────────────────────────
 
 
 @patch("main.fetch_pair_books")
-def test_binary_search_degrading_depth(mock_books):
+def test_sizing_degrading_depth(mock_books):
     # First 10 contracts are cheap, next 20 are more expensive, last 20 are bad
     mock_books.return_value = _books(
         ant_yes_bids=[(0.85, 10), (0.75, 20), (0.55, 20)],
@@ -89,11 +89,11 @@ def test_binary_search_degrading_depth(mock_books):
     assert result["annualized_yield"] >= 0.04
 
 
-# ── Binary search: all depth is profitable → fills to max ────────────────────
+# ── Sizing: all depth is profitable → fills to max ───────────────────────────
 
 
 @patch("main.fetch_pair_books")
-def test_binary_search_fills_to_max(mock_books):
+def test_sizing_fills_to_max(mock_books):
     # Uniformly cheap: $0.15 + $0.65 = $0.80 per pair at all depths
     mock_books.return_value = _books(
         ant_yes_bids=[(0.85, 100)],
@@ -173,6 +173,61 @@ def test_buy_result_fields(mock_books):
         assert key in result, f"missing key: {key}"
     assert len(result["ant_fills"]) > 0
     assert len(result["con_fills"]) > 0
+
+
+# ── Small-edge arb: fee ceiling kills n=1 but fees amortize at size ──────────
+
+
+@patch("main.fetch_pair_books")
+def test_buy_small_edge_despite_fee_ceiling(mock_books):
+    # NO fill = $0.98, YES fill = $0.01 -> $0.99 per pair. At n=1 the fee
+    # ceiling adds 1c per leg ($1.01 total, no yield), but at n=300 fees
+    # amortize to ~0.15c per pair -> ~50% annualized over 7 days.
+    mock_books.return_value = _books(
+        ant_yes_bids=[(0.02, 300)],
+        con_no_bids=[(0.99, 300)],
+    )
+    result = evaluate_pair(_pair(days_out=7), hurdle_yield=0.04, max_n=500)
+    assert result["recommendation"] == "buy"
+    assert result["n_contracts"] == 300
+    assert result["annualized_yield"] > 0.04
+
+
+# ── Below-hurdle pass still records the best achievable yield ────────────────
+
+
+@patch("main.fetch_pair_books")
+def test_pass_records_best_yield(mock_books):
+    # $0.998 per pair over 7 days -> ~2.5% after amortized fees: a real but
+    # below-hurdle yield. Must be recorded on the pass row, not left NULL.
+    mock_books.return_value = _books(
+        ant_yes_bids=[(0.012, 500)],
+        con_no_bids=[(0.99, 500)],
+    )
+    result = evaluate_pair(_pair(days_out=7), hurdle_yield=0.04, max_n=500)
+    assert result["recommendation"] == "pass"
+    assert result["annualized_yield"] is not None
+    assert 0 < result["annualized_yield"] < 0.04
+    assert result["excess_yield"] < 0
+    assert result["max_fillable"] == 500
+
+
+# ── Sizing stops where marginal fills drop below the hurdle ──────────────────
+
+
+@patch("main.fetch_pair_books")
+def test_sizing_stops_at_marginal_hurdle(mock_books):
+    # Top 40 fills cost $0.99/pair (~50% annualized over 7 days); deeper fills
+    # cost $1.009/pair — a guaranteed loss. Sizing to the largest n whose
+    # *average* yield clears the hurdle would buy ~65 (diluting ~31c of profit
+    # to ~5c); NPV sizing must take exactly the profitable 40.
+    mock_books.return_value = _books(
+        ant_yes_bids=[(0.02, 40), (0.001, 460)],
+        con_no_bids=[(0.99, 500)],
+    )
+    result = evaluate_pair(_pair(days_out=7), hurdle_yield=0.0421, max_n=500)
+    assert result["recommendation"] == "buy"
+    assert result["n_contracts"] == 40
 
 
 # ── High hurdle flips BUY to PASS on same books ─────────────────────────────

@@ -197,8 +197,8 @@ def evaluate_pair(pair: dict, hurdle_yield: float, max_n: int = 500, conn=None) 
     """Evaluate a confirmed arb pair against live orderbooks.
 
     Takes a pair dict (from get_pairs_for_review(conn, "confirmed")), fetches
-    orderbooks, finds the optimal number of contracts via binary search where
-    yield still exceeds the hurdle.
+    orderbooks, sizes the position by maximizing NPV at the hurdle discount
+    rate — takes every marginal fill whose after-fee return beats the hurdle.
 
     Returns a dict with recommendation, optimal n, costs, yields, and fills.
     """
@@ -237,68 +237,62 @@ def evaluate_pair(pair: dict, hurdle_yield: float, max_n: int = 500, conn=None) 
     if not books["con_bids"]:
         log.warning("Pair %s: empty consequent orderbook (%s)", pair_id, con_ticker)
 
-    def yield_at_n(n: int) -> float | None:
+    def total_cost_at(n: int) -> float:
+        """All-in cost (fills + fees) for n pairs. Valid for n <= max_fillable."""
         leg_a = walk_book(books["ant_bids"], n)
         leg_b = walk_book(books["con_bids"], n)
-        effective_n = min(leg_a.filled, leg_b.filled)
-        if effective_n == 0:
-            return None
-        # Re-walk at effective_n if constrained
-        if effective_n < n:
-            leg_a = walk_book(books["ant_bids"], effective_n)
-            leg_b = walk_book(books["con_bids"], effective_n)
-        cost_per = (leg_a.cost + leg_a.fees + leg_b.cost + leg_b.fees) / effective_n
-        if cost_per >= 1.0:
-            return None
-        return (1.0 / cost_per) ** (365.0 / days) - 1.0
-
-    # Check yield at n=1
-    y1 = yield_at_n(1)
-    log.debug("Pair %s: yield_at_n(1) = %s, hurdle = %.4f", pair_id, y1, hurdle_yield)
-    if y1 is None or y1 < hurdle_yield:
-        # Build a pass result with top-of-book info
-        tob_cost = books["ant_tob_no_ask"] + books["con_tob_yes_ask"]
-        return {
-            "pair_id": pair_id, "recommendation": "pass", "n_contracts": 0,
-            "cost_per_pair": tob_cost, "total_cost": 0.0,
-            "ant_leg_cost": 0.0, "ant_leg_fees": 0.0,
-            "con_leg_cost": 0.0, "con_leg_fees": 0.0,
-            "annualized_yield": y1, "hurdle_yield": hurdle_yield,
-            "excess_yield": (y1 - hurdle_yield) if y1 is not None else None,
-            "days_to_maturity": days, "max_fillable": 0,
-            "tob_ant_no_ask": books["ant_tob_no_ask"],
-            "tob_con_yes_ask": books["con_tob_yes_ask"],
-            "tob_cost": tob_cost,
-            "ant_fills": [], "con_fills": [],
-        }
+        return leg_a.cost + leg_a.fees + leg_b.cost + leg_b.fees
 
     # Find max fillable
     leg_a_max = walk_book(books["ant_bids"], max_n)
     leg_b_max = walk_book(books["con_bids"], max_n)
     max_fillable = min(leg_a_max.filled, leg_b_max.filled)
 
-    # Binary search for largest n where yield >= hurdle
-    lo, hi = 1, max_fillable
-    best_n = 1
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        y = yield_at_n(mid)
-        if y is not None and y >= hurdle_yield:
-            best_n = mid
-            lo = mid + 1
-        else:
-            hi = mid - 1
+    # Size by maximizing NPV at the hurdle discount rate: take every marginal
+    # fill that beats the hurdle, none below it. Maximizing size subject to an
+    # average-yield hurdle would instead keep buying below-hurdle fills as
+    # long as earlier cheap fills subsidize the blend. NPV(n) is not concave —
+    # the fee ceiling (min 1¢ per leg per fill level) adds a sawtooth and book
+    # depth bends it down — so scan every size. Track the best blended yield
+    # seen so a pass still records how close the pair came.
+    pv_payoff = (1.0 + hurdle_yield) ** (-days / 365.0)
+    best_n = 0
+    best_npv = 0.0
+    best_yield = None
+    for n in range(1, max_fillable + 1):
+        cost = total_cost_at(n)
+        npv = n * pv_payoff - cost
+        if npv > best_npv:
+            best_n, best_npv = n, npv
+        if cost < n:
+            y = (n / cost) ** (365.0 / days) - 1.0
+            if best_yield is None or y > best_yield:
+                best_yield = y
 
-    log.debug("Pair %s: binary search -> best_n=%d, max_fillable=%d", pair_id, best_n, max_fillable)
+    log.debug("Pair %s: best_n=%d, npv=%.4f, max_fillable=%d, best_yield=%s, hurdle=%.4f",
+              pair_id, best_n, best_npv, max_fillable, best_yield, hurdle_yield)
 
-    # Final evaluation at optimal n
+    if best_n == 0:
+        # No fillable size has positive NPV at the hurdle
+        tob_cost = books["ant_tob_no_ask"] + books["con_tob_yes_ask"]
+        return {
+            "pair_id": pair_id, "recommendation": "pass", "n_contracts": 0,
+            "cost_per_pair": tob_cost, "total_cost": 0.0,
+            "ant_leg_cost": 0.0, "ant_leg_fees": 0.0,
+            "con_leg_cost": 0.0, "con_leg_fees": 0.0,
+            "annualized_yield": round(best_yield, 6) if best_yield is not None else None,
+            "hurdle_yield": hurdle_yield,
+            "excess_yield": round(best_yield - hurdle_yield, 6) if best_yield is not None else None,
+            "days_to_maturity": days, "max_fillable": max_fillable,
+            "tob_ant_no_ask": books["ant_tob_no_ask"],
+            "tob_con_yes_ask": books["con_tob_yes_ask"],
+            "tob_cost": tob_cost,
+            "ant_fills": [], "con_fills": [],
+        }
+
+    # Final evaluation at optimal n (best_n <= max_fillable, so both legs fill)
     leg_a = walk_book(books["ant_bids"], best_n)
     leg_b = walk_book(books["con_bids"], best_n)
-    effective_n = min(leg_a.filled, leg_b.filled)
-    if effective_n < best_n and effective_n > 0:
-        leg_a = walk_book(books["ant_bids"], effective_n)
-        leg_b = walk_book(books["con_bids"], effective_n)
-        best_n = effective_n
 
     total = leg_a.cost + leg_a.fees + leg_b.cost + leg_b.fees
     cost_per = total / best_n if best_n > 0 else None
