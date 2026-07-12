@@ -61,7 +61,7 @@
 
   <p>
     <strong>Strategy:</strong> Buy NO on antecedent + YES on consequent<br>
-    <strong>Yield:</strong>
+    <strong>Est. yield (after fees):</strong>
     {% if pair.annualized_yield is not none %}
       {% if pair.annualized_yield > 9.99 %}&gt;999%{% else %}{{ "%.2f"|format(pair.annualized_yield * 100) }}%{% endif %}
       {% if pair.annualized_yield > 0 %}
@@ -75,6 +75,7 @@
     <br>
     <strong>Cost:</strong>
     {% if pair.arb_cost is not none %}${{ "%.4f"|format(pair.arb_cost) }}{% else %}N/A{% endif %}
+    {% if pair.est_fees is not none %}<small>+ ~${{ "%.4f"|format(pair.est_fees) }} est. fees</small>{% endif %}
     <br>
     <strong>Days to maturity:</strong>
     {% if pair.days_to_maturity is not none %}{{ pair.days_to_maturity }}{% else %}N/A{% endif %}

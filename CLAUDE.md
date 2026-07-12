@@ -6,7 +6,7 @@ Kalshi cross-market arbitrage checker and scanner for binary prediction markets.
 
 Ten code files + templates + deploy scripts:
 
-- **`kalshi.py`** -- shared Kalshi API helpers, fee model, and orderbook utilities. Contains `KALSHI_BASE`, `TAKER_FEE_COEFF`, `fetch_market()`, `fetch_orderbook()`, `taker_fee()`, `walk_book()`, and the `Fill`, `LegResult`, `Side` types.
+- **`kalshi.py`** -- shared Kalshi API helpers, fee model, and orderbook utilities. Contains `KALSHI_BASE`, `TAKER_FEE_COEFF`, `fetch_market()`, `fetch_orderbook()`, `taker_fee()`, `est_fee_per_contract()` (amortized fee rate without the penny ceiling, for display estimates), `walk_book()`, and the `Fill`, `LegResult`, `Side` types.
 
 - **`main.py`** -- evaluates a known arb pair. Has `evaluate_arb(ticker_a, side_a, ticker_b, side_b, n, settlement_date, discount_rate)` which walks both orderbooks, computes all-in cost with fees, and returns an `ArbResult` (key field: `npv`). CLI wrapper hardcodes the Musetti FO/GS tennis tickers.
 
@@ -16,9 +16,9 @@ Ten code files + templates + deploy scripts:
 
 - **`dedicated.py`** -- alternative LLM backend orchestrator using DigitalOcean dedicated inference (managed; `openai/gpt-oss-120b` on MI300X, $2.59/hr, atl1). Same `create`/`destroy`/`status` contract and export lines as `gpu_droplet.py`. Blocked until the account's dedicated-inference quota is granted. Requires `DIGITALOCEAN_TOKEN`.
 
-- **`db.py`** -- pure SQLite persistence functions. Every function takes `conn` as first arg — no global state. Tables: `tickers`, `prices`, `candidate_pairs`, `trade_evaluations`, `treasury_yields`, `settings`. Designed for REPL use: `import db; conn = db.get_connection("slonk_arb.db")`.
+- **`db.py`** -- SQLite persistence functions plus review-row economics. Every function takes `conn` as first arg — no global state. Tables: `tickers`, `prices`, `candidate_pairs`, `trade_evaluations`, `treasury_yields`, `settings`. Pair dicts for the review UI carry an estimated post-fee yield (`_add_pair_economics`, using `est_fee_per_contract` from kalshi.py — its only project import). Designed for REPL use: `import db; conn = db.get_connection("slonk_arb.db")`.
 
-- **`evaluate.py`** -- evaluates confirmed arb pairs against live orderbooks. Fetches orderbooks, finds optimal contract count via binary search, stores results in DB.
+- **`evaluate.py`** -- evaluates confirmed arb pairs against live orderbooks. Fetches orderbooks, sizes positions by maximizing NPV at the hurdle discount rate (takes every marginal fill that beats the hurdle; scans every size exhaustively because the fee ceiling makes NPV non-concave in size), stores results in DB.
 
 - **`app.py`** -- Flask webapp for human review of candidate pairs. Dashboard, review queue, reviewed pairs list, pair detail with confirm/reject buttons.
 
@@ -148,7 +148,7 @@ All take `conn: sqlite3.Connection` as first arg:
 - `get_screened_pair_keys(conn)` -- set of already-evaluated pair keys
 - `bulk_upsert_pair_results(conn, results, model, auto_confirm_high=False, code_version=None)` -- store screening results; `auto_confirm_high` marks `high` results confirmed (rule screener); `code_version` records the screener's git commit
 - `deactivate_missing_tickers(conn, active_tickers)` -- mark disappeared tickers inactive
-- `get_pairs_for_review(conn, status, exclude_expired=False)` -- fetch pairs for review UI (`unreviewed`/`confirmed`/`rejected`/`need_more_info`/`high_unreviewed`); `exclude_expired=True` drops pairs where either leg's `expected_expiration_time` has passed — the arb needs both markets open (used by the review queue and evaluate.py so resolved pairs retire instead of being shown/evaluated forever; legs with unknown expiration are treated as open)
+- `get_pairs_for_review(conn, status, exclude_expired=False)` -- fetch pairs for review UI (`unreviewed`/`confirmed`/`rejected`/`need_more_info`/`high_unreviewed`); rows carry `arb_cost` (raw ask sum), `est_fees`, and an estimated post-fee `annualized_yield`/`excess_yield` (top-of-book, at-size estimate — the evaluator's stored numbers are authoritative); `exclude_expired=True` drops pairs where either leg's `expected_expiration_time` has passed — the arb needs both markets open (used by the review queue and evaluate.py so resolved pairs retire instead of being shown/evaluated forever; legs with unknown expiration are treated as open)
 - `get_pair_detail(conn, pair_id)` -- full info for a single pair
 - `set_review(conn, pair_id, decision)` -- set human review
 
@@ -176,7 +176,7 @@ Uses Pico CSS (CDN, classless). Kalshi links: `https://kalshi.com/markets/<serie
 `kalshi.py`, `main.py`, `scan.py`, and `evaluate.py` use Python `logging`. `print()` is for user-facing CLI output; `logging` is for diagnostics written to log files.
 
 - **`kalshi.py`** -- DEBUG traces on `fetch_market` and `fetch_orderbook` (ticker, status code, latency)
-- **`main.py`** -- DEBUG for orderbook fetches, yield calculations, binary search; WARNING for empty orderbooks
+- **`main.py`** -- DEBUG for orderbook fetches, yield calculations, contract-size scan; WARNING for empty orderbooks
 - **`scan.py`** -- writes to `scan.log` (configurable via `--log-file`). Batch matching summaries, raw LLM responses, unmatched result warnings.
 - **`evaluate.py`** -- writes to `evaluate.log` (configurable via `--log-file`). Per-pair INFO for BUY/PASS, WARNING for API errors.
 

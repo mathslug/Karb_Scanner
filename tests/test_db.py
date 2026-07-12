@@ -245,6 +245,31 @@ def test_get_pairs_rejected(conn):
     assert len(db.get_pairs_for_review(conn, "rejected")) == 1
 
 
+def test_get_pairs_yield_includes_est_fees(conn):
+    exp = _iso(30)
+    db.upsert_tickers(conn, [
+        _make_market(ticker="ANT", series_ticker="S1", no_ask_dollars="0.988",
+                     expected_expiration_time=exp),
+        _make_market(ticker="CON", series_ticker="S2", yes_ask_dollars="0.01",
+                     expected_expiration_time=exp),
+    ])
+    db.bulk_upsert_pair_results(conn, [{
+        "ticker_a": "ANT", "ticker_b": "CON",
+        "antecedent_ticker": "ANT", "consequent_ticker": "CON",
+        "confidence": "high", "reasoning": "test",
+    }], "test-model")
+    pair = db.get_pairs_for_review(conn, "unreviewed")[0]
+    assert pair["arb_cost"] == 0.998
+    # amortized fee: 0.07 * [0.988*0.012 + 0.01*0.99] per pair
+    fees = 0.07 * (0.988 * 0.012 + 0.01 * 0.99)
+    assert pair["est_fees"] == pytest.approx(fees, abs=1e-4)
+    days = pair["days_to_maturity"]
+    fee_free = (1.0 / 0.998) ** (365.0 / days) - 1.0
+    expected = (1.0 / (0.998 + fees)) ** (365.0 / days) - 1.0
+    assert pair["annualized_yield"] == pytest.approx(expected, rel=1e-6)
+    assert pair["annualized_yield"] < fee_free
+
+
 # ── exclude_expired ──────────────────────────────────────────────────────────
 
 

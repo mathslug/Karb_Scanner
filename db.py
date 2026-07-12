@@ -8,6 +8,8 @@ import json
 import sqlite3
 from datetime import date, datetime, timezone
 
+from kalshi import est_fee_per_contract
+
 
 SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS tickers (
@@ -555,6 +557,40 @@ def compute_hurdle_yield(conn: sqlite3.Connection, days: int | None) -> float | 
     return max(treasury_rate / 100 + buffer, borrow_rate)
 
 
+def _add_pair_economics(conn: sqlite3.Connection, d: dict) -> None:
+    """Attach arb_cost, est_fees, and estimated post-fee yield fields to a
+    pair dict (in place).
+
+    arb_cost is the raw top-of-book ask sum (buy NO on antecedent + YES on
+    consequent). The yield estimate adds the amortized fee rate per leg —
+    a top-of-book, at-size estimate that ignores book depth and the per-fill
+    penny ceiling; the evaluator's stored numbers are authoritative.
+    """
+    d["arb_cost"] = None
+    d["est_fees"] = None
+    est_cost = None
+    ant_no = d.get("antecedent_no_ask")
+    con_yes = d.get("consequent_yes_ask")
+    if ant_no is not None and con_yes is not None:
+        try:
+            ant_no, con_yes = float(ant_no), float(con_yes)
+        except (ValueError, TypeError):
+            pass
+        else:
+            fees = est_fee_per_contract(ant_no) + est_fee_per_contract(con_yes)
+            d["arb_cost"] = round(ant_no + con_yes, 4)
+            d["est_fees"] = round(fees, 4)
+            est_cost = ant_no + con_yes + fees
+    d["annualized_yield"], d["days_to_maturity"] = _compute_yield(
+        est_cost, d.get("antecedent_expiration"),
+    )
+    d["hurdle_yield"] = compute_hurdle_yield(conn, d["days_to_maturity"])
+    if d["annualized_yield"] is not None and d["hurdle_yield"] is not None:
+        d["excess_yield"] = d["annualized_yield"] - d["hurdle_yield"]
+    else:
+        d["excess_yield"] = None
+
+
 def get_pairs_for_review(
     conn: sqlite3.Connection, status: str, exclude_expired: bool = False,
 ) -> list[dict]:
@@ -565,8 +601,9 @@ def get_pairs_for_review(
     the arb needs both markets open (legs with no known expiration are
     treated as open). Used by the review queue and by evaluate.py so
     resolved pairs stop being evaluated forever.
-    Returns list of dicts with pair + joined ticker info + computed arb_cost,
-    sorted by cost ascending then confidence descending.
+    Returns list of dicts with pair + joined ticker info + computed arb_cost
+    and estimated post-fee yield (see _add_pair_economics), sorted by excess
+    yield descending then confidence.
     """
     if status == "unreviewed":
         where = "cp.human_review IS NULL AND cp.confidence != 'need_more_info'"
@@ -618,24 +655,7 @@ def get_pairs_for_review(
     result = []
     for r in rows:
         d = dict(r)
-        # Compute arb cost: buy NO on antecedent + YES on consequent
-        ant_no = d.get("antecedent_no_ask")
-        con_yes = d.get("consequent_yes_ask")
-        if ant_no is not None and con_yes is not None:
-            try:
-                d["arb_cost"] = round(float(ant_no) + float(con_yes), 4)
-            except (ValueError, TypeError):
-                d["arb_cost"] = None
-        else:
-            d["arb_cost"] = None
-        d["annualized_yield"], d["days_to_maturity"] = _compute_yield(
-            d["arb_cost"], d.get("antecedent_expiration"),
-        )
-        d["hurdle_yield"] = compute_hurdle_yield(conn, d["days_to_maturity"])
-        if d["annualized_yield"] is not None and d["hurdle_yield"] is not None:
-            d["excess_yield"] = d["annualized_yield"] - d["hurdle_yield"]
-        else:
-            d["excess_yield"] = None
+        _add_pair_economics(conn, d)
         result.append(d)
 
     result.sort(key=lambda d: (
@@ -678,23 +698,7 @@ def get_pair_detail(conn: sqlite3.Connection, pair_id: int) -> dict | None:
         return None
 
     d = dict(row)
-    ant_no = d.get("antecedent_no_ask")
-    con_yes = d.get("consequent_yes_ask")
-    if ant_no is not None and con_yes is not None:
-        try:
-            d["arb_cost"] = round(float(ant_no) + float(con_yes), 4)
-        except (ValueError, TypeError):
-            d["arb_cost"] = None
-    else:
-        d["arb_cost"] = None
-    d["annualized_yield"], d["days_to_maturity"] = _compute_yield(
-        d["arb_cost"], d.get("antecedent_expiration"),
-    )
-    d["hurdle_yield"] = compute_hurdle_yield(conn, d["days_to_maturity"])
-    if d["annualized_yield"] is not None and d["hurdle_yield"] is not None:
-        d["excess_yield"] = d["annualized_yield"] - d["hurdle_yield"]
-    else:
-        d["excess_yield"] = None
+    _add_pair_economics(conn, d)
     return d
 
 

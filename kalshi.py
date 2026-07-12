@@ -89,13 +89,21 @@ def fetch_orderbook(ticker: str) -> dict:
 # ── Fee & book-walking ──────────────────────────────────────────────────────
 
 
+def est_fee_per_contract(price: float) -> float:
+    """Amortized taker fee per contract at `price`: the raw fee rate without
+    the per-fill penny ceiling, which washes out at size. Used for display
+    estimates where the fill quantity isn't known.
+    """
+    return TAKER_FEE_COEFF * price * (1.0 - price)
+
+
 def taker_fee(num_contracts: int, price: float) -> float:
     """Kalshi taker fee in dollars for a fill of num_contracts at price.
 
     fee = ceil(0.07 * C * P * (1 - P) * 100) / 100
     P is contract price in dollars [0, 1]. Result rounded up to nearest cent.
     """
-    raw = TAKER_FEE_COEFF * num_contracts * price * (1.0 - price)
+    raw = num_contracts * est_fee_per_contract(price)
     # Round before ceil: float noise (e.g. 175.00000000000003 for an exact
     # 175-cent fee) must not push the ceiling up an extra cent.
     return math.ceil(round(raw * 100, 9)) / 100
