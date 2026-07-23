@@ -216,7 +216,7 @@ Uses the Kalshi public REST API at `https://api.elections.kalshi.com/trade-api/v
 
 ## Deployment
 
-Deployed to a single Digital Ocean droplet (AlmaLinux 10, s-1vcpu-512mb-10gb) at `karb.mathslug.com`.
+Deployed to a single Digital Ocean droplet (AlmaLinux 10, s-1vcpu-1gb, 25GB disk, $6/mo) at `karb.mathslug.com`.
 
 ### Server layout
 

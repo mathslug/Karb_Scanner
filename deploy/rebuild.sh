@@ -35,7 +35,7 @@ fi
 echo "==> Creating droplet..."
 DROPLET_INFO=$(doctl compute droplet create slonk-arb \
     --image almalinux-10-x64 \
-    --size s-1vcpu-512mb-10gb \
+    --size s-1vcpu-1gb \
     --region nyc1 \
     --ssh-keys "$(doctl compute ssh-key list --format ID --no-header | head -1)" \
     --user-data-file "$SCRIPT_DIR/cloud-init.yml" \
