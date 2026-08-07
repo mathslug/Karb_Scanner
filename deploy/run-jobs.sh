@@ -34,10 +34,12 @@ failed=0
 step() {
   local name="$1"; shift
   printf '== %s\n' "$name"
-  # --rm so exited containers do not accumulate. --memory is a blast-radius
-  # cap, not a tuning parameter; the droplet ran the whole system in 954MB.
+  # --rm so exited containers do not accumulate. --memory is sized to hold the
+  # database rather than to constrain the process — these jobs sweep the whole
+  # 702MB of it, and a cap below that makes the kernel reclaim page cache from
+  # this cgroup and re-read from the SD card. See deploy/karb.container.
   if podman run --rm \
-      --memory=1g \
+      --memory=1536m \
       --env-file "$ENV_FILE" \
       --env "SLONK_DB=${DB}" \
       --volume "${DATA}:/data" \

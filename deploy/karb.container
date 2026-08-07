@@ -36,12 +36,23 @@ EnvironmentFile=%h/.config/karb.env
 Environment=SLONK_DB=/data/slonk_arb.db
 Environment=PYTHONUNBUFFERED=1
 
-# The Pi has 8GB; this is a blast-radius cap, not a tuning parameter. The
-# droplet ran the whole system — web and scans — in 954MB.
+# For whorl this is purely a blast-radius cap. For karb it is also a page-cache
+# budget, which is why it is not 512m.
+#
+# A cgroup's memory limit covers page cache as well as process memory, and the
+# kernel reclaims from *that cgroup* on reaching it regardless of how much free
+# RAM the host has. At 512m against a 702MB database that meant 852 reclaim
+# events, `file 0` bytes of cache retained, and every read going back to the SD
+# card — while the Pi sat with 5.5GB free. Nothing was ever OOM-killed; the
+# process itself is a steady ~136MB.
+#
+# So: sized to hold the database plus headroom, not to constrain the process.
+# Revisit if the database outgrows it — the symptom is `memory.events` max
+# climbing again, not a crash.
 #
 # Passed through rather than set as a Quadlet key: podman 5.4's Quadlet has no
 # `Memory=` key in [Container] and refuses to generate the unit if given one.
-PodmanArgs=--memory=512m
+PodmanArgs=--memory=1536m
 
 # A script rather than an inline `python -c "…"`: Quadlet's parser does not
 # survive nested quotes and silently truncates the command at the first inner
