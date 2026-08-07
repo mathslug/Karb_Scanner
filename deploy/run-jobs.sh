@@ -65,8 +65,17 @@ step() {
 # refreshing it.
 receipt() {
   local dir=/var/lib/rpi-health/jobs
-  [ -d "$dir" ] || return 0          # not provisioned; not this script's job
-  date +%s > "${dir}/karb.${JOB}" 2>/dev/null || true
+  if [ ! -d "$dir" ]; then
+    # Say so rather than skipping quietly. This account cannot create the
+    # directory (its parent is root-owned), so without a word here the
+    # dashboard would show "no clean run" forever for jobs that ran perfectly,
+    # and the obvious place to look would be the wrong one.
+    printf '== NOTE: %s missing; dashboard cannot see this run (bootstrap.sh creates it)\n' \
+      "$dir" >&2
+    return 0
+  fi
+  date +%s > "${dir}/karb.${JOB}" 2>/dev/null \
+    || printf '== NOTE: could not write the job receipt to %s\n' "$dir" >&2
 }
 
 case "$JOB" in
