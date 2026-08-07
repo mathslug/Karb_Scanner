@@ -52,6 +52,23 @@ step() {
   fi
 }
 
+# Receipt for the Pi's dashboard, written only if every step succeeded.
+#
+# systemd already knows a unit's Result, and querying that would need no new
+# machinery — but it is the wrong source for two reasons. A unit that has never
+# run reports Result=success with no timestamp, so "success" alone is not
+# evidence anything happened; and user unit state resets on reboot, so every
+# power cut would blank the record on a machine built to survive power cuts.
+#
+# A file on disk has neither problem, and its AGE catches both failure modes at
+# once: a job that fails and a job that stops being scheduled both stop
+# refreshing it.
+receipt() {
+  local dir=/var/lib/rpi-health/jobs
+  [ -d "$dir" ] || return 0          # not provisioned; not this script's job
+  date +%s > "${dir}/karb.${JOB}" 2>/dev/null || true
+}
+
 case "$JOB" in
   # 07:30 UTC — fetch every sports ticker into the DB. No LLM calls.
   sports)
@@ -97,5 +114,7 @@ case "$JOB" in
     exit 2
     ;;
 esac
+
+[ "$failed" = "0" ] && receipt
 
 exit "$failed"
