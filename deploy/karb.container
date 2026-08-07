@@ -36,19 +36,24 @@ EnvironmentFile=%h/.config/karb.env
 Environment=SLONK_DB=/data/slonk_arb.db
 Environment=PYTHONUNBUFFERED=1
 
-# For whorl this is purely a blast-radius cap. For karb it is also a page-cache
-# budget, which is why it is not 512m.
+# Sized to the DATABASE, not to the process. gunicorn itself is a steady
+# ~136MB; 512m would be ample for it and was what this inherited from whorl.
 #
-# A cgroup's memory limit covers page cache as well as process memory, and the
-# kernel reclaims from *that cgroup* on reaching it regardless of how much free
-# RAM the host has. At 512m against a 702MB database that meant 852 reclaim
-# events, `file 0` bytes of cache retained, and every read going back to the SD
-# card — while the Pi sat with 5.5GB free. Nothing was ever OOM-killed; the
-# process itself is a steady ~136MB.
+# The reason it is not 512m: a cgroup's memory limit covers page cache as well
+# as process memory, and the nightly backup runs VACUUM INTO *inside this
+# container* — pushing all 702MB of the database through the limit. At 512m
+# that produced 852 reclaim events and retained no cache; at 1536m it is 0
+# events and 671MB cached.
 #
-# So: sized to hold the database plus headroom, not to constrain the process.
-# Revisit if the database outgrows it — the symptom is `memory.events` max
-# climbing again, not a crash.
+# Be honest about the size of that win: it saves some repeated SD-card reads
+# during the backup and nothing else. Measured page times were identical
+# before and after, because karb's slowness is CPU — db.get_connection()
+# re-runs the migrations on every connection, 0.6s a time — not I/O.
+#
+# Kept anyway because it costs nothing (a cap is a ceiling, not a reservation,
+# and the Pi has 7.8GB) and because the database only grows. Watch
+# `memory.events` max, not `podman stats` MemPerc: this read a comfortable 25%
+# throughout.
 #
 # Passed through rather than set as a Quadlet key: podman 5.4's Quadlet has no
 # `Memory=` key in [Container] and refuses to generate the unit if given one.
