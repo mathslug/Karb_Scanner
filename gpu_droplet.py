@@ -14,15 +14,14 @@ serving an OpenAI-compatible endpoint. Same contract as dedicated.py:
 without one it falls back to the ROCm base image and a cloud-init script that
 installs Ollama and pulls the model (~20-40 min first boot).
 
-Ollama has no auth, so access control is a tag-scoped cloud firewall that
-only admits port 11434 from the scanner droplet and the machine running
-`create`. Requires DIGITALOCEAN_TOKEN (droplet, firewall, tag, ssh_key read
-scopes; write for droplet/firewall).
+Ollama has no auth, so access control is a tag-scoped cloud firewall that only
+admits port 11434 from the machine running `create` — which is the scanner.
+Requires DIGITALOCEAN_TOKEN (droplet, firewall, tag, ssh_key read scopes; write
+for droplet/firewall).
 """
 
 import argparse
 import os
-import socket
 import sys
 import time
 
@@ -41,7 +40,6 @@ SNAPSHOT_NAME = "slonk-llm-snapshot"
 FIREWALL_NAME = "slonk-llm-fw"
 OLLAMA_PORT = 11434
 MODEL = "gpt-oss:120b"
-SCANNER_HOST = "karb.mathslug.com"
 POLL_INTERVAL_S = 20
 READY_TIMEOUT_S = 45 * 60
 
@@ -114,15 +112,16 @@ def _caller_ip() -> str | None:
 
 def ensure_firewall() -> None:
     """Create or update the tag-scoped firewall admitting Ollama traffic
-    only from the scanner droplet and the machine running create."""
-    sources = []
-    try:
-        sources.append(socket.gethostbyname(SCANNER_HOST))
-    except OSError:
-        log(f"WARNING: could not resolve {SCANNER_HOST}; scanner access not whitelisted")
+    only from the machine running create.
+
+    That machine IS the scanner, so a separate hostname lookup was always
+    redundant — and once karb moved behind a Cloudflare tunnel it became
+    actively dangerous: karb.mathslug.com resolves to a shared anycast address,
+    which this would have whitelisted on port 11434 in front of an
+    unauthenticated Ollama.
+    """
     caller = _caller_ip()
-    if caller and caller not in sources:
-        sources.append(caller)
+    sources = [caller] if caller else []
     if not sources:
         log("ERROR: no source IPs for firewall; refusing to expose Ollama")
         sys.exit(2)

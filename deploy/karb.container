@@ -1,0 +1,61 @@
+# Quadlet unit for karb's web UI (rootless podman + systemd).
+#
+# Installed to ~/.config/containers/systemd/karb.container on the host.
+# systemd's podman-user-generator turns this into karb.service at boot; there
+# is no `podman generate systemd` step and no unit to regenerate when this file
+# changes — `systemctl --user daemon-reload` is enough.
+#
+# This unit is ONLY the web UI. The scheduled scans and evaluations run as
+# separate short-lived containers from the same image, driven by timers in the
+# rpi repo (systemd/karb-*.timer). Keeping them separate means a scan cannot be
+# killed halfway through by a redeploy of the web app, and a crashed web app
+# does not silently stop the scanner.
+#
+# Requires `loginctl enable-linger <user>` so it starts at boot without a login.
+
+[Unit]
+Description=karb — Kalshi cross-market arbitrage scanner (web UI)
+Documentation=https://github.com/mathslug/Karb_Scanner
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=karb
+Image=localhost/karb:latest
+
+# Loopback only. The public path is the Cloudflare tunnel, which reaches this
+# from the same host.
+PublishPort=127.0.0.1:8000:8000
+
+# %h is the owning user's home directory. Holds slonk_arb.db and nothing else
+# — the 1.2GB of weekly `cp` copies on the droplet are not migrated; dated
+# snapshots are the backup script's job, not the app's.
+Volume=%h/data/karb:/data
+
+EnvironmentFile=%h/.config/karb.env
+Environment=SLONK_DB=/data/slonk_arb.db
+Environment=PYTHONUNBUFFERED=1
+
+# The Pi has 8GB; this is a blast-radius cap, not a tuning parameter. The
+# droplet ran the whole system — web and scans — in 954MB.
+#
+# Passed through rather than set as a Quadlet key: podman 5.4's Quadlet has no
+# `Memory=` key in [Container] and refuses to generate the unit if given one.
+PodmanArgs=--memory=512m
+
+# A script rather than an inline `python -c "…"`: Quadlet's parser does not
+# survive nested quotes and silently truncates the command at the first inner
+# quote, leaving the container permanently "unhealthy" while the app is fine.
+# Verify with `podman inspect --format '{{.Config.Healthcheck.Test}}'` after
+# any change here.
+HealthCmd=python /app/healthcheck.py
+HealthInterval=30s
+HealthRetries=3
+HealthStartPeriod=15s
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

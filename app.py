@@ -60,6 +60,24 @@ def create_app(db_path: str = DB_PATH) -> Flask:
     def login():
         return redirect(_safe_next(request.args.get("next")) or url_for("index"))
 
+    @app.route("/healthz")
+    def healthz():
+        """Liveness plus database reachability.
+
+        Read by the container health check every 30s and by the Pi's dashboard,
+        so it is deliberately cheap: one trivial query, no template, no LLM, no
+        outbound network. `/` looks like the obvious probe and is not — it runs
+        the full pair-stats aggregate, which would turn monitoring into steady
+        load on a 700MB database.
+        """
+        try:
+            conn = get_conn()
+            conn.execute("SELECT 1").fetchone()
+            conn.close()
+        except Exception:
+            return Response("database unavailable", 503, {"Content-Type": "text/plain"})
+        return Response("ok", 200, {"Content-Type": "text/plain"})
+
     @app.route("/")
     def index():
         conn = get_conn()

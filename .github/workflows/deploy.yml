@@ -1,8 +1,16 @@
-name: Deploy
+name: Deploy (retired — droplet only)
 
+# karb runs on the Raspberry Pi, which is behind NAT with no inbound path, so
+# nothing can SSH in to push a deploy. The Pi pulls instead: a timer checks
+# this branch every 15 minutes and redeploys when the remote ref moves
+# (auto-deploy.sh in the rpi repo). Tests still gate deploys — they moved into
+# the image build, so a failing suite fails the build and no container starts.
+#
+# Kept rather than deleted so the droplet can still be redeployed by hand
+# during the migration, but manual-trigger only: a push to main must not
+# resurrect a server that is being decommissioned.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:

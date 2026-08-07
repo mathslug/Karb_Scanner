@@ -1,0 +1,21 @@
+# Keep the build context small and the image free of state.
+#
+# A fresh clone on the Pi has none of this — it is all gitignored — but a build
+# from a working copy would otherwise pull in a 700MB database and ~400MB of
+# logs, and bake them into the image.
+#
+# .git is deliberately NOT excluded: scan.py's code_version() shells out to
+# `git describe` and stamps the commit onto every row it writes. Without the
+# repo it degrades to NULL, silently losing the provenance of every result.
+# The pack is 213KB.
+
+.venv
+__pycache__
+.pytest_cache
+*.db
+*.db-shm
+*.db-wal
+*.log
+db_backups/
+.env
+analysis/
