@@ -795,14 +795,26 @@ def main() -> None:
     # Output options
     parser.add_argument(
         "--log-file", default="scan.log",
-        help="log file path (default: scan.log)",
+        help="log file path, or '-' for stderr (default: scan.log)",
     )
     args = parser.parse_args()
 
     # ── Logging setup ─────────────────────────────────────────────────────
-    handler = logging.FileHandler(args.log_file, mode="a")
+    # The destination picks the level, deliberately. "-" means stderr, which
+    # under systemd means the journal — which on the Pi is tmpfs capped at
+    # 64MB. At DEBUG these jobs write ~10MB/day, mostly urllib3 connection
+    # noise, enough to evict every other service's logs within hours. At INFO
+    # and above it is ~1MB/day (measured against 15 days of production logs).
+    # A real file still gets the full DEBUG trail, which is what you want when
+    # you are actually debugging.
+    if args.log_file == "-":
+        handler = logging.StreamHandler(sys.stderr)
+        level = logging.INFO
+    else:
+        handler = logging.FileHandler(args.log_file, mode="a")
+        level = logging.DEBUG
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S"))
-    logging.basicConfig(level=logging.DEBUG, handlers=[handler])
+    logging.basicConfig(level=level, handlers=[handler])
     log.info("=== scan.py started: %s ===", " ".join(sys.argv[1:]))
 
     # ── Database setup ────────────────────────────────────────────────────

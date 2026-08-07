@@ -52,14 +52,22 @@ def main() -> None:
     )
     parser.add_argument(
         "--log-file", default="evaluate.log",
-        help="log file path (default: evaluate.log)",
+        help="log file path, or '-' for stderr (default: evaluate.log)",
     )
     args = parser.parse_args()
 
     # ── Logging setup ────────────────────────────────────────────────────
-    handler = logging.FileHandler(args.log_file, mode="a")
+    # See scan.py for why the destination picks the level: "-" is stderr and
+    # therefore the journal, which is tmpfs and capped. DEBUG here is 140MB
+    # per 15 days; INFO and above is 15.9MB of that.
+    if args.log_file == "-":
+        handler = logging.StreamHandler(sys.stderr)
+        level = logging.INFO
+    else:
+        handler = logging.FileHandler(args.log_file, mode="a")
+        level = logging.DEBUG
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s", datefmt="%H:%M:%S"))
-    logging.basicConfig(level=logging.DEBUG, handlers=[handler])
+    logging.basicConfig(level=level, handlers=[handler])
     logging.getLogger().info("=== evaluate.py started: %s ===", " ".join(sys.argv[1:]))
 
     conn = db_mod.get_connection(args.db)

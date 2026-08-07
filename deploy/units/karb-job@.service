@@ -1,0 +1,30 @@
+# One scheduled karb job. The instance name selects which:
+#
+#   karb-job@sports.service  karb-job@daily.service
+#   karb-job@sweep.service   karb-job@hot.service
+#
+# Templated rather than four near-identical files, so the schedule lives in the
+# .timer units and the work lives in run-jobs.sh, with nothing duplicated
+# between them.
+#
+# A user unit, installed to ~/.config/systemd/user/ and run as the service
+# account that owns the containers. Requires `loginctl enable-linger` so timers
+# fire without a login session.
+
+[Unit]
+Description=karb scheduled job: %i
+Documentation=https://github.com/mathslug/Karb_Scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# %h is the service account's home. The checkout is what auto-deploy updates,
+# so a schedule change ships with the code change that motivated it.
+ExecStart=%h/apps/karb/deploy/run-jobs.sh %i
+
+# The sports pass walks every ticker on Kalshi; the daily pass adds an LLM
+# screen over what it finds. Generous rather than tuned — the point is to
+# eventually kill a hung job, not to enforce a deadline.
+TimeoutStartSec=2h

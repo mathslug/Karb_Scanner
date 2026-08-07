@@ -1,0 +1,12 @@
+# Full re-evaluation of confirmed and high-confidence pairs, twice a day.
+
+[Unit]
+Description=karb — evaluation sweep (15:00 and 20:00 UTC)
+
+[Timer]
+OnCalendar=*-*-* 15:00:00 UTC
+OnCalendar=*-*-* 20:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

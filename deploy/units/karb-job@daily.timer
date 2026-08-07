@@ -1,0 +1,12 @@
+# The main daily pass: Treasury yields, LLM screen of tennis/hockey/golf, then
+# both evaluation modes over what it found.
+
+[Unit]
+Description=karb — daily scan and evaluation (08:00 UTC)
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

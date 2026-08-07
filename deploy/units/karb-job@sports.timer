@@ -1,0 +1,19 @@
+# Fetch all sports tickers into the DB. No LLM calls.
+#
+# Times are pinned to UTC, as they were in cron. Without the suffix systemd
+# would read them in the host's local timezone, which is America/New_York —
+# silently shifting every job by 4 or 5 hours depending on the season.
+
+[Unit]
+Description=karb — daily sports ticker fetch (07:30 UTC)
+
+[Timer]
+OnCalendar=*-*-* 07:30:00 UTC
+
+# Run on the next boot if the Pi was off when this was due. A missed daily
+# fetch is worth catching up on; see karb-job@hot.timer for the case where it
+# is not.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
