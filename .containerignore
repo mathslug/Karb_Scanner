@@ -19,3 +19,7 @@ __pycache__
 db_backups/
 .env
 analysis/
+
+# Deployment artifacts run on the host from the git checkout, not inside the
+# image: run-jobs.sh drives podman, and units/ is installed into systemd.
+deploy/
