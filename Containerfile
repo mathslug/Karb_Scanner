@@ -64,5 +64,12 @@ EXPOSE 8000
 
 # Two workers as on the droplet. Safe here in a way it is not for AvaLong:
 # karb keeps all its state in SQLite, not in process memory.
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", \
+#
+# --timeout 120 rather than the default 30. db.get_connection() re-runs the
+# migrations on every call, one of which UPDATEs all 610k rows of `tickers`.
+# Warm, that is fast; against a cold page cache — the first request after a
+# reboot, reading a 700MB file off an SD card — it overran 30s and gunicorn
+# aborted the worker mid-request. This is a tourniquet: the actual fix is for
+# get_connection() to stop running migrations on every connection.
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120", \
      "--access-logfile", "-", "app:create_app()"]

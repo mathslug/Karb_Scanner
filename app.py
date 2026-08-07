@@ -2,6 +2,7 @@
 """Flask webapp for reviewing Kalshi arbitrage candidate pairs."""
 
 import os
+import sqlite3
 from functools import wraps
 
 from dotenv import load_dotenv
@@ -69,9 +70,17 @@ def create_app(db_path: str = DB_PATH) -> Flask:
         outbound network. `/` looks like the obvious probe and is not — it runs
         the full pair-stats aggregate, which would turn monitoring into steady
         load on a 700MB database.
+
+        Note it opens sqlite3 directly rather than going through
+        db.get_connection(). That helper runs the migrations on *every* call,
+        including an UPDATE across all 610k rows of `tickers`. With a cold page
+        cache that took longer than gunicorn's timeout and the worker was
+        aborted mid-request — a health check that reports 500 because the
+        health check itself is too expensive. Read-only, so it also cannot be
+        the thing that mutates the schema.
         """
         try:
-            conn = get_conn()
+            conn = sqlite3.connect(f"file:{app.config['DB_PATH']}?mode=ro", uri=True)
             conn.execute("SELECT 1").fetchone()
             conn.close()
         except Exception:
