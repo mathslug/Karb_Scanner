@@ -23,8 +23,16 @@ def create_app(db_path: str = DB_PATH) -> Flask:
     app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(32))
     CSRFProtect(app)
 
+    # :memory: doesn't persist across connections, so tests (which use it)
+    # need the every-request path. A real file only needs migrations once.
+    memory_db = db_path == ":memory:"
+    if not memory_db:
+        db_mod.get_connection(db_path).close()
+
     def get_conn():
-        return db_mod.get_connection(app.config["DB_PATH"])
+        if memory_db:
+            return db_mod.get_connection(app.config["DB_PATH"])
+        return db_mod.connect(app.config["DB_PATH"])
 
     def _check_auth():
         """Return True if the request has valid admin credentials."""
@@ -71,12 +79,8 @@ def create_app(db_path: str = DB_PATH) -> Flask:
         the full pair-stats aggregate, which would turn monitoring into steady
         load on a 700MB database.
 
-        Note it opens sqlite3 directly rather than going through
-        db.get_connection(). That helper runs the migrations on *every* call,
-        including an UPDATE across all 610k rows of `tickers`. With a cold page
-        cache that took longer than gunicorn's timeout and the worker was
-        aborted mid-request — a health check that reports 500 because the
-        health check itself is too expensive. Read-only, so it also cannot be
+        Opens sqlite3 directly, read-only, rather than going through
+        get_conn() — independent of the request-connection pool and cannot be
         the thing that mutates the schema.
         """
         try:

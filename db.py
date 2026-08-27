@@ -200,8 +200,10 @@ def init_db(db_path: str) -> None:
     conn.close()
 
 
-def get_connection(db_path: str = "slonk_arb.db") -> sqlite3.Connection:
-    """REPL-friendly connection helper. Sets WAL mode, foreign keys, Row factory."""
+def connect(db_path: str = "slonk_arb.db") -> sqlite3.Connection:
+    """Request-scoped connection: pragmas only, no migrations or schema script.
+    Use get_connection() once per process on an app that hasn't already had it
+    called against this db_path this run."""
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
     # Default busy_timeout is 0: a second writer fails instantly instead of
@@ -209,6 +211,14 @@ def get_connection(db_path: str = "slonk_arb.db") -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
+    return conn
+
+
+def get_connection(db_path: str = "slonk_arb.db") -> sqlite3.Connection:
+    """REPL-friendly connection helper. Brings the schema up to date, which
+    includes a full-table migration scan — call once per process, not per
+    request. See connect() for the cheap version."""
+    conn = connect(db_path)
     _run_migrations(conn)
     conn.executescript(SCHEMA_SQL)
     conn.executemany(
