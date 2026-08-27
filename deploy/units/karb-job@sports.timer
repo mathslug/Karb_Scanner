@@ -5,10 +5,12 @@
 # silently shifting every job by 4 or 5 hours depending on the season.
 
 [Unit]
-Description=karb — daily sports ticker fetch (07:30 UTC)
+Description=karb — daily sports ticker fetch (07:35 UTC)
 
 [Timer]
-OnCalendar=*-*-* 07:30:00 UTC
+# Off :30 on purpose — karb-job@hot fires there too (plus up to 90s jitter),
+# and both write the same database.
+OnCalendar=*-*-* 07:35:00 UTC
 
 # Run on the next boot if the Pi was off when this was due. A missed daily
 # fetch is worth catching up on; see karb-job@hot.timer for the case where it

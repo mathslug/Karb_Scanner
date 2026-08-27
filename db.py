@@ -204,6 +204,9 @@ def get_connection(db_path: str = "slonk_arb.db") -> sqlite3.Connection:
     """REPL-friendly connection helper. Sets WAL mode, foreign keys, Row factory."""
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
+    # Default busy_timeout is 0: a second writer fails instantly instead of
+    # waiting. scan/evaluate/app all write here concurrently.
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
     _run_migrations(conn)
