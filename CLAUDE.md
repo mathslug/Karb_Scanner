@@ -4,15 +4,15 @@ Kalshi cross-market arbitrage checker and scanner for binary prediction markets.
 
 ## Architecture
 
-Ten code files + templates + deploy scripts:
+Twelve code files + templates + container/deploy files + tests:
 
 - **`kalshi.py`** -- shared Kalshi API helpers, fee model, and orderbook utilities. Contains `KALSHI_BASE`, `TAKER_FEE_COEFF`, `fetch_market()`, `fetch_orderbook()`, `taker_fee()`, `est_fee_per_contract()` (amortized fee rate without the penny ceiling, for display estimates), `walk_book()`, and the `Fill`, `LegResult`, `Side` types.
 
 - **`main.py`** -- evaluates a known arb pair. Has `evaluate_arb(ticker_a, side_a, ticker_b, side_b, n, settlement_date, discount_rate)` which walks both orderbooks, computes all-in cost with fees, and returns an `ArbResult` (key field: `npv`). CLI wrapper hardcodes the Musetti FO/GS tennis tickers.
 
-- **`scan.py`** -- discovers arb pairs automatically. Fetches sports markets from Kalshi, groups by entity (`yes_sub_title`), generates candidate pairs within each entity, screens via an LLM for logical implication, persists to SQLite DB, prints terminal summary. LLM backend: if `LLM_BASE_URL` is set, uses that OpenAI-compatible endpoint (production: DigitalOcean dedicated inference running `openai/gpt-oss-120b`); otherwise calls the Anthropic API directly.
+- **`scan.py`** -- discovers arb pairs automatically. Fetches sports markets from Kalshi, groups by entity (`yes_sub_title`), generates candidate pairs within each entity, screens via an LLM for logical implication, persists to SQLite DB, prints terminal summary. LLM backend: if `LLM_BASE_URL` is set, uses that OpenAI-compatible endpoint; otherwise calls the Anthropic API directly, which is what production does — both GPU backends are quota-blocked.
 
-- **`gpu_droplet.py`** -- default LLM backend orchestrator: ephemeral MI300X GPU droplet ($1.99/hr, atl1) running Ollama with `gpt-oss:120b` (`create`/`destroy`/`status`/`snapshot`). `create` prefers the `slonk-llm-snapshot` snapshot (model weights baked in, ~5 min boot; without it, first boot installs Ollama + pulls the model via cloud-init, ~20-40 min), maintains a tag-scoped cloud firewall admitting port 11434 only from the scanner droplet + the creating machine (Ollama has no auth), waits for a warm-up inference, and prints `export LLM_BASE_URL/LLM_API_KEY/LLM_MODEL` lines for the shell wrapper to eval. `destroy` deletes by tag. Requires `DIGITALOCEAN_TOKEN`.
+- **`gpu_droplet.py`** -- default LLM backend orchestrator: ephemeral MI300X GPU droplet ($1.99/hr, atl1) running Ollama with `gpt-oss:120b` (`create`/`destroy`/`status`/`snapshot`). `create` prefers the `slonk-llm-snapshot` snapshot (model weights baked in, ~5 min boot; without it, first boot installs Ollama + pulls the model via cloud-init, ~20-40 min), maintains a tag-scoped cloud firewall admitting port 11434 only from the scanner host + the creating machine (Ollama has no auth), waits for a warm-up inference, and prints `export LLM_BASE_URL/LLM_API_KEY/LLM_MODEL` lines for the shell wrapper to eval. `destroy` deletes by tag. Requires `DIGITALOCEAN_TOKEN`.
 
 - **`dedicated.py`** -- alternative LLM backend orchestrator using DigitalOcean dedicated inference (managed; `openai/gpt-oss-120b` on MI300X, $2.59/hr, atl1). Same `create`/`destroy`/`status` contract and export lines as `gpu_droplet.py`. Blocked until the account's dedicated-inference quota is granted. Requires `DIGITALOCEAN_TOKEN`.
 
@@ -26,11 +26,19 @@ Ten code files + templates + deploy scripts:
 
 - **`notify.py`** -- sends email notifications for BUY recommendations via Gmail SMTP. Called by `evaluate.py`.
 
+- **`snapshot.py`** -- writes a consistent copy of the live DB to `/data/.backup.db` via `VACUUM INTO`. Run inside the container by the off-box backup so it sees the same file the app has open; a plain file copy of a WAL database silently loses everything since the last checkpoint.
+
+- **`healthcheck.py`** -- container health probe; exits 0 if `/healthz` answers.
+
 - **`templates/`** -- Jinja2 templates (`base.html`, `review.html`, `detail.html`, `trades.html`, `evaluations.html`, `settings.html`) using Pico CSS.
 
-- **`deploy/`** -- server provisioning (`cloud-init.yml`, `rebuild.sh`), cron wrappers (`run.sh`, `run_scan_gpu.sh`), and GitHub Actions workflow. `run_scan_gpu.sh` provisions the LLM backend via the orchestrator named in `SLONK_LLM_ORCH` (default `gpu_droplet.py`), runs the scan against it with the orchestrator-provided `LLM_MODEL`, and always destroys it (trap on EXIT).
+- **`Containerfile`** -- the one image both roles run from (web UI via `CMD`, scheduled jobs via a different command). Runs the test suite at build time, so a failing suite fails the build and no container starts.
 
-- **`scripts/`** -- helper scripts for operations (`pull_prod.sh`, `db_summary.py`, `check_server.sh`, `log_errors.sh`, `pair_details.py`).
+- **`deploy/`** -- `karb.container` (Quadlet unit for the web UI), `units/` (one templated job service + four timers), `run-jobs.sh` (runs one scheduled job as short-lived containers). Retired droplet-era files kept for reference only: `cloud-init.yml`, `rebuild.sh`, `run.sh`, `slonk-arb.cron`. `run_scan_gpu.sh` provisions the LLM backend via the orchestrator named in `SLONK_LLM_ORCH` (default `gpu_droplet.py`), runs the scan against it with the orchestrator-provided `LLM_MODEL`, and always destroys it (trap on EXIT); unused while the GPU backends are quota-blocked.
+
+- **`tests/`** -- 166 pytest tests, no network. Run with `uv run pytest`.
+
+- **`scripts/`** -- helper scripts for operations (`pull_prod.sh`, `db_summary.py`, `check_server.sh`, `log_errors.sh`, `pair_details.py`). `pull_prod.sh` and `check_server.sh` target the Pi.
 
 ## Running
 
@@ -78,7 +86,7 @@ SLONK_DB=my.db uv run app.py                       # custom DB path
 
 ### CLI args -- scan.py
 - `--filter` / `-f` -- comma-separated sport/competition names to filter (e.g. "tennis", "tennis,hockey", "tennis,pro football"). Values map to `sub_sport` for local entity filtering; special values like "pro football" and "college football" are translated to the correct Kalshi API tag ("Football") for fetching.
-- `--model` -- LLM model name (default: `claude-sonnet-5`; production cron passes the orchestrator-provided `$LLM_MODEL`, e.g. `gpt-oss:120b` for Ollama)
+- `--model` -- LLM model name (default: `claude-sonnet-5`; the GPU path passes the orchestrator-provided `$LLM_MODEL`, e.g. `gpt-oss:120b` for Ollama)
 - `--min-volume` -- exclude markets below this volume (default: 200)
 - `--batch-size` -- pairs per LLM call (default: 12)
 - `--category` -- Kalshi category (default: Sports)
@@ -92,7 +100,7 @@ SLONK_DB=my.db uv run app.py                       # custom DB path
 - `--db` -- SQLite database path (default: slonk_arb.db)
 - `--max-n` -- max contracts to search for optimal fill (default: 500)
 - `--mode` -- `confirmed` (human-approved, default) or `high` (high-confidence unreviewed)
-- `--hot` -- only evaluate pairs whose latest `tob_cost` is below `--hot-threshold` (default 1.03); used by the hourly cron tier to re-check near-parity pairs cheaply
+- `--hot` -- only evaluate pairs whose latest `tob_cost` is below `--hot-threshold` (default 1.03); used by the hourly `karb-job@hot` timer to re-check near-parity pairs cheaply
 - `--log-file` -- log file path (default: evaluate.log)
 
 ## Scanner data flow
@@ -176,6 +184,7 @@ Flask app (`app.py`) on port 5001 with routes:
 | `/evaluations` | Recent evaluations stream (`?days=N`) |
 | `/settings` | Yield benchmark settings + Treasury curve |
 | `/login` | Authentication |
+| `/healthz` | Liveness probe for the container health check |
 | `POST /pair/<id>/review` | Submit review decision (confirm/reject/reverse) |
 | `POST /settings` | Update hurdle rate settings |
 
@@ -183,16 +192,23 @@ Uses Pico CSS (CDN, classless). Kalshi links: `https://kalshi.com/markets/<serie
 
 ## Logging
 
-`kalshi.py`, `main.py`, `scan.py`, and `evaluate.py` use Python `logging`. `print()` is for user-facing CLI output; `logging` is for diagnostics written to log files.
+`kalshi.py`, `main.py`, `scan.py`, and `evaluate.py` use Python `logging`. `print()` is for user-facing CLI output; `logging` is for diagnostics.
+
+In production every job passes `--log-file -`, which sends logs to stderr and so, under systemd, to the journal — the file defaults are unrotated and reached 162MB. Locally the defaults still write files.
 
 - **`kalshi.py`** -- DEBUG traces on `fetch_market` and `fetch_orderbook` (ticker, status code, latency)
 - **`main.py`** -- DEBUG for orderbook fetches, yield calculations, contract-size scan; WARNING for empty orderbooks
-- **`scan.py`** -- writes to `scan.log` (configurable via `--log-file`). Batch matching summaries, raw LLM responses, unmatched result warnings.
-- **`evaluate.py`** -- writes to `evaluate.log` (configurable via `--log-file`). Per-pair INFO for BUY/PASS, WARNING for API errors.
+- **`scan.py`** -- `--log-file` (default `scan.log`, `-` for stderr). Batch matching summaries, raw LLM responses, unmatched result warnings.
+- **`evaluate.py`** -- `--log-file` (default `evaluate.log`, `-` for stderr). Per-pair INFO for BUY/PASS, WARNING for API errors.
 
 When `main.py` is imported by `evaluate.py`, its log calls flow through evaluate's `basicConfig`. When run standalone as CLI, log calls are no-ops.
 
-Both `scan.py` and `evaluate.py` open log files with `filemode="a"` (append). All `print()` output is also preserved in `cron.log` via `>>` append redirect.
+Both `scan.py` and `evaluate.py` open log files with `filemode="a"` (append).
+
+Read production logs with:
+```
+ssh mypi-remote 'sudo journalctl _UID=$(id -u podsvc) --since "2 days ago"'
+```
 
 ## Key types
 
@@ -216,65 +232,111 @@ Uses the Kalshi public REST API at `https://api.elections.kalshi.com/trade-api/v
 
 ## Deployment
 
-Deployed to a single Digital Ocean droplet (AlmaLinux 10, s-1vcpu-1gb, 25GB disk, $6/mo) at `karb.mathslug.com`.
+Runs on a Raspberry Pi as a rootless podman container, served publicly at
+`karb.mathslug.com` through a Cloudflare tunnel. The Pi is behind NAT with no
+inbound path, so `karb.mathslug.com` resolves to Cloudflare and does **not**
+accept SSH. Reach the host itself with the `mypi` (LAN) or `mypi-remote`
+(tunnel) ssh aliases.
+
+The `~/src/rpi` repo owns the machine; `~/src/rpi/apps/karb.conf` is the single
+source of truth for this app's hostname, port, data directory, units, backup
+command and job thresholds. Deploys, auto-deploy, backups, the health dashboard
+and the tunnel ingress all read it, so changing where karb lives means editing
+that file, not five scripts.
 
 ### Server layout
 
 ```
-/opt/slonk-arb/              # Code (git clone, deployed via GitHub Actions)
-/var/lib/slonk-arb/          # Persistent data (DB, .env, backups/)
-/var/log/slonk-arb/          # Log files (scan.log, evaluate.log, cron.log)
+/home/podsvc/apps/karb/         # Code (git checkout, updated by auto-deploy)
+/home/podsvc/data/karb/         # Persistent data (slonk_arb.db) — bind-mounted to /data
+/home/podsvc/.config/karb.env   # Secrets (see below)
+/var/lib/rpi-health/jobs/       # Job receipts read by the Pi's dashboard
 ```
+
+Logs go to the systemd journal, not to files.
 
 ### Stack
 
-- **nginx** -- reverse proxy + Let's Encrypt SSL (admin auth is handled in the app via `SLONK_ADMIN_PASSWORD`)
-- **gunicorn** -- WSGI server via systemd (`slonk-arb.service`)
-- **cron** -- scheduled jobs via `/etc/cron.d/slonk-arb`
+- **cloudflared** -- public ingress + TLS; the only thing in front of the app
+- **podman (rootless)** -- one image, `localhost/karb:latest`, built on the Pi
+- **gunicorn** -- WSGI server inside the container, 2 workers, port 8000 on loopback
+- **systemd (user units)** -- `karb.service` for the web UI (from the Quadlet
+  `deploy/karb.container`), plus four timers driving `karb-job@.service`.
+  Requires `loginctl enable-linger podsvc` so these run without a login.
 - **Gmail SMTP** -- email notifications for BUY signals
 
-### Deploy scripts
+The web UI and the scheduled jobs run the *same image* with different commands,
+so the scanner and the review UI can never disagree about which code version
+they are running. They are separate units so a redeploy cannot kill a scan
+halfway through, and a crashed web app does not silently stop the scanner.
 
-- **`deploy/cloud-init.yml`** -- cloud-config user-data for first-boot provisioning of a new droplet. Installs packages, creates users, clones repo, sets up nginx/systemd/cron/SELinux.
-- **`deploy/rebuild.sh`** -- creates a new droplet via doctl, waits for cloud-init, pushes DB, sets up DNS + SSL, triggers deploy, and cleans up old droplets. Usage: `bash deploy/rebuild.sh [--db path/to/backup.db]`
-- **`deploy/run.sh`** -- cron wrapper that loads `.env` and runs commands via `uv run`.
-- **`.github/workflows/deploy.yml`** -- GitHub Actions: `git pull` + `uv sync` + install crontab + restart webapp on push to `main`.
+### Deploying
 
-### Cron schedule (ET / UTC)
+Pull-based: nothing can reach the Pi from outside. A timer runs `git ls-remote`
+every 15 minutes and rebuilds only when the branch has moved
+(`~/src/rpi/auto-deploy.sh`). The test suite runs at image build time, so a
+failing suite fails the build and the previous container keeps serving.
 
-| Time ET | UTC | Job |
-|---------|-----|-----|
-| 3:30 AM | 07:30 | `scan.py --category Sports --max-pairs 0` -- fetch all sports tickers into DB (no LLM) |
-| 4:00 AM | 08:00 | `fetch_yields.py` + `scan.py --from-db --filter "tennis,hockey,golf" --min-volume 200` (rule screener + Anthropic LLM) + `evaluate.py` + `evaluate.py --mode high` (chained) |
-| 11 AM, 4 PM | 15:00, 20:00 | `evaluate.py` + `evaluate.py --mode high` -- full re-evaluation sweeps against fresh orderbooks |
-| :30 hourly | :30 hourly | `evaluate.py --hot` (+ `--mode high`) -- re-check near-parity pairs only (latest tob_cost < 1.03) |
-| Sun 3 AM | Sun 7:00 | DB backup to `/var/lib/slonk-arb/backups/` |
+`.github/workflows/deploy.yml` is retired and manual-trigger only.
+
+### Scheduled jobs
+
+Four timers, each running `deploy/run-jobs.sh <job>`. Every step in a job runs
+even if an earlier one fails, and the script exits non-zero so systemd marks
+the unit failed rather than burying it in a log.
+
+| UTC | Unit | Job |
+|-----|------|-----|
+| 07:35 | `karb-job@sports` | `scan.py --category Sports --max-pairs 0` -- fetch all sports tickers into DB (no LLM) |
+| 08:00 | `karb-job@daily` | `fetch_yields.py` + `scan.py --from-db --filter "tennis,hockey,golf" --min-volume 200` (rule screener + Anthropic LLM) + `evaluate.py` + `evaluate.py --mode high` |
+| 15:00, 20:00 | `karb-job@sweep` | `evaluate.py` + `evaluate.py --mode high` -- full re-evaluation sweeps against fresh orderbooks |
+| hourly at :30 | `karb-job@hot` | `evaluate.py --hot` (+ `--mode high`) -- re-check near-parity pairs only (latest tob_cost < 1.03) |
+
+A clean run touches `/var/lib/rpi-health/jobs/karb.<job>`. The Pi's dashboard
+watches the *age* of those files, which catches both a job that fails and a job
+that has stopped being scheduled. Thresholds live in `JOB_RECEIPTS` in
+`karb.conf`.
+
+### Backups
+
+`~/src/rpi/backup/pull-backups.sh` runs daily on the Mac and pulls, rather than
+the Pi pushing. It runs `snapshot.py` *inside* the container (`VACUUM INTO`,
+never a file copy — WAL means copying the main file yields a valid but
+incomplete database), retrieves it gzipped, verifies the copy it kept, and
+writes a dated snapshot under `~/src/rpi/backups/`.
+
+`scripts/pull_prod.sh` decompresses the newest of those into the working tree.
+It does not touch production.
+
+### Operations
+
+```
+bash scripts/check_server.sh                    # commit, units, HTTP, receipts, disk
+bash scripts/pull_prod.sh                       # production DB into the working tree
+ssh mypi-remote 'sudo journalctl _UID=$(id -u podsvc) -f'
+```
 
 ### Email notifications
 
 **`notify.py`** -- `send_buy_alert(results)` sends a summary email via Gmail SMTP when BUY signals are found. Called automatically by `evaluate.py`. Requires env vars: `SMTP_USER`, `SMTP_PASSWORD`, `NOTIFY_EMAIL`.
 
-### Environment variables (`.env`)
+### Environment variables
+
+On the Pi these live in `/home/podsvc/.config/karb.env`, created from
+`ENV_TEMPLATE` in `karb.conf` on first deploy and then left alone. Locally, in
+`.env`.
 
 ```
-ANTHROPIC_API_KEY=...       # only needed for the direct-Anthropic LLM backend
-DIGITALOCEAN_TOKEN=...      # gpu_droplet.py/dedicated.py: droplet, firewall, tag, ssh_key, dedicated-inference, vpc scopes
-SLONK_ADMIN_PASSWORD=...
+ANTHROPIC_API_KEY=...       # LLM screening in scan.py
+SLONK_ADMIN_PASSWORD=...    # HTTP auth on write routes; empty = no admin
+FLASK_SECRET_KEY=...        # session signing; regenerating it logs everyone out
 SMTP_USER=...
 SMTP_PASSWORD=...
 NOTIFY_EMAIL=...
-FLASK_SECRET_KEY=...
 ```
 
-`LLM_BASE_URL` / `LLM_API_KEY` are not stored in `.env`; `run_scan_gpu.sh` gets them per-run from `dedicated.py create`.
+`DIGITALOCEAN_TOKEN` is deliberately absent on the Pi: without it
+`gpu_droplet.py` cannot spin up a $1.99/hr GPU droplet.
 
-### GitHub Actions secrets
-
-- `DROPLET_URL` -- server hostname (e.g. karb.mathslug.com)
-- `SSH_PRIVATE_KEY` -- deploy user's private key
-- `ANTHROPIC_KEY` -- Anthropic API key (written to `.env` on first deploy)
-- `SLONK_ADMIN_PASSWORD` -- webapp basic auth password (written to `.env` on first deploy)
-- `SMTP_USER` -- Gmail address for sending notifications
-- `SMTP_PASSWORD` -- Gmail app password for SMTP authentication
-- `NOTIFY_EMAIL` -- recipient email address for BUY alerts
-- `FLASK_SECRET_KEY` -- stable secret for Flask sessions/CSRF (generate with `python -c "import secrets; print(secrets.token_hex(32))"`)
+`LLM_BASE_URL` / `LLM_API_KEY` are never stored; `run_scan_gpu.sh` gets them
+per-run from the orchestrator.

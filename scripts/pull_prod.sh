@@ -1,45 +1,42 @@
 #!/usr/bin/env bash
-# Pull production DB and logs to local machine for analysis.
-# Backs up existing local files first, then pulls fresh copies
-# named so `uv run app.py` uses the pulled DB directly.
-# Usage: bash scripts/pull_prod.sh
+#
+# pull_prod.sh — decompress the newest Pi backup of the production database
+# into the working tree, so `uv run app.py` and ad-hoc queries see real data.
+#
+#     bash scripts/pull_prod.sh
+#
+# Snapshots come from ~/src/rpi/backup/pull-backups.sh, which runs daily.
+# Logs are in the Pi's journal, not files:
+#     ssh mypi-remote 'journalctl --user-unit "karb-*" --since "2 days ago"'
 set -euo pipefail
 
-HOST="almalinux@karb.mathslug.com"
-LOG_DIR="/var/log/slonk-arb"
-DATA_DIR="/var/lib/slonk-arb"
+SNAPSHOT="${KARB_SNAPSHOT:-${HOME}/src/rpi/backups/latest/karb/slonk_arb.db.gz}"
+LOCAL_DB="${SLONK_DB:-slonk_arb.db}"
+STALE_HOURS="${KARB_STALE_HOURS:-36}"
 
-LOCAL_DB="slonk_arb.db"
-LOCAL_LOGS=(cron.log scan.log evaluate.log evaluate-high.log evaluate-afternoon.log)
-
-# Back up existing local files if any exist
-BACKUP_DIR="db_backups/$(date +%Y%m%d_%H%M%S)"
-has_existing=false
-for f in "$LOCAL_DB" "${LOCAL_LOGS[@]}"; do
-    if [ -f "$f" ]; then
-        has_existing=true
-        break
-    fi
-done
-
-if $has_existing; then
-    echo "==> Backing up existing files to $BACKUP_DIR/"
-    mkdir -p "$BACKUP_DIR"
-    for f in "$LOCAL_DB" "${LOCAL_LOGS[@]}"; do
-        if [ -f "$f" ]; then
-            mv "$f" "$BACKUP_DIR/"
-            echo "  moved $f"
-        fi
-    done
+if [ ! -f "$SNAPSHOT" ]; then
+    echo "No snapshot at $SNAPSHOT" >&2
+    echo "Refresh with: ~/src/rpi/backup/pull-backups.sh" >&2
+    exit 1
 fi
 
-echo "==> Pulling DB..."
-scp "$HOST:$DATA_DIR/slonk_arb.db" "$LOCAL_DB"
+age_h=$(( ( $(date +%s) - $(stat -f %m "$SNAPSHOT" 2>/dev/null || stat -c %Y "$SNAPSHOT") ) / 3600 ))
+echo "==> Snapshot: $SNAPSHOT (${age_h}h old)"
+if [ "$age_h" -gt "$STALE_HOURS" ]; then
+    echo "    STALE (>${STALE_HOURS}h). Refresh with: ~/src/rpi/backup/pull-backups.sh" >&2
+fi
 
-echo "==> Pulling logs..."
-for log in "${LOCAL_LOGS[@]}"; do
-    scp "$HOST:$LOG_DIR/$log" "$log" 2>/dev/null || echo "  $log not found on server, skipping"
-done
+if [ -f "$LOCAL_DB" ]; then
+    BACKUP_DIR="db_backups/$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$BACKUP_DIR"
+    mv "$LOCAL_DB" "$BACKUP_DIR/"
+    echo "==> Moved existing $LOCAL_DB to $BACKUP_DIR/"
+fi
 
-echo "==> Done. Files:"
-ls -lh "$LOCAL_DB" "${LOCAL_LOGS[@]}" 2>/dev/null
+echo "==> Decompressing..."
+# Temp file so an interrupted run leaves no truncated database at $LOCAL_DB.
+gunzip -c "$SNAPSHOT" > "${LOCAL_DB}.partial"
+mv "${LOCAL_DB}.partial" "$LOCAL_DB"
+
+echo "==> Done."
+ls -lh "$LOCAL_DB"
