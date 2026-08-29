@@ -60,17 +60,40 @@ def _depth(series: str, event: str, rules: str) -> int | None:
     return None
 
 
-def _walkover_hole(consequent: dict) -> bool:
-    """True if the consequent only resolves YES once a ball has been played.
+# Kalshi states the cancellation terms in rules_secondary, and they differ by
+# market type:
+#
+#   match / set winner  no ball played -> "resolve to a fair price"
+#   advance             qualified but did not compete -> "still resolve to Yes"
+#   tournament winner   participant withdraws -> "resolve No"
+#   PGA (one shared blob covering several types)
+#                       winner + round leader -> No
+#                       finishing position, make the cut -> "Fair Market Value"
+#
+# Only a fair-value settlement breaks an implication: the consequent can fail
+# to resolve Yes while the antecedent still holds. Yes and No settlements are
+# both fine — a clean binary keeps the implication intact.
+_FAIR_SETTLEMENT_RE = re.compile(r"fair\s+(?:price|market\s+value)", re.I)
 
-    A match market carries "after a ball has been played". If the opponent
-    withdraws before play, the player advances on a walkover and can still win
-    the tournament while this leg does not resolve YES — so the implication has
-    a hole, and the hedge pays nothing rather than the guaranteed $1. Only a
-    problem when the match is the CONSEQUENT: as an antecedent ("won the
-    match" -> "competed") it is airtight.
+
+def _walkover_hole(consequent: dict) -> bool:
+    """True if a cancellation could stop the consequent resolving Yes.
+
+    Then the hedge pays a fair-value settlement instead of the guaranteed $1
+    while the antecedent still holds. Only matters on the consequent side: as
+    an antecedent ("won the match" -> "competed") a cancellation just makes the
+    antecedent false, which never breaks an implication.
+
+    The PGA blob describes several market types at once, so a fair-value
+    mention there is attributed to any leg in that series. That over-flags the
+    winner and round-leader markets, which settle No — erring toward holding
+    the pair for a human, which is the safe direction here.
     """
-    return "ball has been played" in (consequent["rules_primary"] or "")
+    secondary = consequent.get("rules_secondary") or ""
+    if secondary:
+        return bool(_FAIR_SETTLEMENT_RE.search(secondary))
+    # Fallback until rules_secondary backfills: the tennis match phrasing.
+    return "ball has been played" in (consequent.get("rules_primary") or "")
 
 
 def decide(a: dict, b: dict, antecedent: str,
@@ -107,7 +130,7 @@ def main() -> int:
     conn = db_mod.get_connection(args.db)
     pairs = db_mod.get_pairs_for_review(conn, "high_unreviewed", exclude_expired=True)
     info = lambda t: dict(conn.execute(
-        "select ticker, series_ticker, event_ticker, rules_primary "
+        "select ticker, series_ticker, event_ticker, rules_primary, rules_secondary "
         "from tickers where ticker=?", (t,)).fetchone())
 
     counts = {"confirmed": 0, "rejected": 0, "left": 0}
