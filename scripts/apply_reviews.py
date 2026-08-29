@@ -60,7 +60,21 @@ def _depth(series: str, event: str, rules: str) -> int | None:
     return None
 
 
-def decide(a: dict, b: dict, antecedent: str) -> tuple[str, str] | None:
+def _walkover_hole(consequent: dict) -> bool:
+    """True if the consequent only resolves YES once a ball has been played.
+
+    A match market carries "after a ball has been played". If the opponent
+    withdraws before play, the player advances on a walkover and can still win
+    the tournament while this leg does not resolve YES — so the implication has
+    a hole, and the hedge pays nothing rather than the guaranteed $1. Only a
+    problem when the match is the CONSEQUENT: as an antecedent ("won the
+    match" -> "competed") it is airtight.
+    """
+    return "ball has been played" in (consequent["rules_primary"] or "")
+
+
+def decide(a: dict, b: dict, antecedent: str,
+           allow_walkover_hole: bool = False) -> tuple[str, str] | None:
     """(decision, why), or None to leave the pair alone."""
     ta, tb = _tournament(a["rules_primary"]), _tournament(b["rules_primary"])
     if not ta or not tb or ta != tb:
@@ -75,6 +89,8 @@ def decide(a: dict, b: dict, antecedent: str) -> tuple[str, str] | None:
         # does not imply the deeper one.
         return ("rejected", f"direction reversed: {shallower['ticker']} does not "
                             f"imply {deeper['ticker']}")
+    if _walkover_hole(shallower) and not allow_walkover_hole:
+        return None
     return ("confirmed", f"{deeper['ticker']} reaches further in the same draw "
                          f"than {shallower['ticker']}")
 
@@ -83,6 +99,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="slonk_arb.db")
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--allow-walkover-hole", action="store_true",
+                    help="also confirm pairs whose consequent is a match market "
+                         "(see _walkover_hole)")
     args = ap.parse_args()
 
     conn = db_mod.get_connection(args.db)
@@ -94,7 +113,7 @@ def main() -> int:
     counts = {"confirmed": 0, "rejected": 0, "left": 0}
     for p in pairs:
         a, b = info(p["ticker_a"]), info(p["ticker_b"])
-        d = decide(a, b, p["antecedent_ticker"])
+        d = decide(a, b, p["antecedent_ticker"], args.allow_walkover_hole)
         if d is None:
             counts["left"] += 1
             print(f"  LEAVE   [{p['id']}] {a['ticker']} x {b['ticker']}")
