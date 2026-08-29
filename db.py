@@ -672,10 +672,14 @@ def get_pairs_for_review(
     """Fetch pairs for review UI.
 
     status: "unreviewed" | "confirmed" | "rejected" | "need_more_info" | "high_unreviewed"
-    exclude_expired: drop pairs where either leg's expiration has passed —
-    the arb needs both markets open (legs with no known expiration are
-    treated as open). Used by the review queue and by evaluate.py so
-    resolved pairs stop being evaluated forever.
+    exclude_expired: keep only pairs whose two legs are both still tradeable
+    — active on Kalshi and not past their expiration (a leg with no known
+    expiration is treated as open). Used by the review queue and by
+    evaluate.py so resolved pairs stop being evaluated forever.
+
+    Tested on ticker_a/ticker_b rather than antecedent/consequent so it does
+    not depend on bulk_upsert_pair_results defaulting the antecedent to
+    ticker_a (db.py:446) — the two legs are the same set either way.
     Returns list of dicts with pair + joined ticker info + computed arb_cost
     and estimated post-fee yield (see _add_pair_economics), sorted by excess
     yield descending then confidence.
@@ -695,10 +699,12 @@ def get_pairs_for_review(
 
     params: tuple = ()
     if exclude_expired:
-        where += """ AND (COALESCE(ant.expected_expiration_time, '') = ''
-                          OR ant.expected_expiration_time > ?)
-                     AND (COALESCE(con.expected_expiration_time, '') = ''
-                          OR con.expected_expiration_time > ?)"""
+        leg_live = """EXISTS (SELECT 1 FROM tickers t WHERE t.ticker = cp.{col}
+                          AND t.is_active = 1
+                          AND (COALESCE(t.expected_expiration_time, '') = ''
+                               OR t.expected_expiration_time > ?))"""
+        where += (" AND " + leg_live.format(col="ticker_a")
+                  + " AND " + leg_live.format(col="ticker_b"))
         now = _now_utc()
         params = (now, now)
 

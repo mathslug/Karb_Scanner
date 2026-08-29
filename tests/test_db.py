@@ -325,6 +325,36 @@ def test_exclude_expired_keeps_unknown_expiration(conn):
     assert len(db.get_pairs_for_review(conn, "unreviewed", exclude_expired=True)) == 1
 
 
+def test_exclude_expired_drops_inactive_leg(conn):
+    """A market that vanished from Kalshi is not tradeable, whatever its
+    expiration says. deactivate_missing_tickers marks it is_active = 0."""
+    _seed_pair_with_expiration(conn, "GONE", "LIVE", _iso(30))
+    assert len(db.get_pairs_for_review(conn, "unreviewed", exclude_expired=True)) == 1
+    db.deactivate_missing_tickers(conn, {"LIVE"})
+    assert db.get_pairs_for_review(conn, "unreviewed", exclude_expired=True) == []
+
+
+def test_exclude_expired_covers_none_confidence_pairs(conn):
+    """A "none" pair is filtered on its own two legs.
+
+    bulk_upsert_pair_results defaults a missing antecedent to ticker_a, so
+    these rows are not actually NULL-legged — this pins that the liveness
+    filter keeps working if that defaulting ever changes."""
+    db.upsert_tickers(conn, [
+        _make_market(ticker="EXP", series_ticker="S1",
+                     expected_expiration_time=_iso(-1)),
+        _make_market(ticker="OK", series_ticker="S2",
+                     expected_expiration_time=_iso(365)),
+    ])
+    db.bulk_upsert_pair_results(conn, [{
+        "ticker_a": "EXP", "ticker_b": "OK",
+        "antecedent_ticker": None, "consequent_ticker": None,
+        "confidence": "none", "reasoning": "no implication",
+    }], "test-model")
+    assert len(db.get_pairs_for_review(conn, "unreviewed")) == 1
+    assert db.get_pairs_for_review(conn, "unreviewed", exclude_expired=True) == []
+
+
 def test_exclude_expired_drops_past_consequent(conn):
     # Antecedent still live, consequent market already settled -> pair is dead
     _seed_pair_with_expiration(conn, "X-A", "X-B", _iso(30), con_expiration=_iso(-5))
