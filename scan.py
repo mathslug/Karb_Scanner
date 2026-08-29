@@ -15,6 +15,7 @@ import functools
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -323,11 +324,110 @@ def rule_screen_pair(a: dict, b: dict) -> dict | None:
                           f"{con['series_ticker']} for the same player and tournament")}
 
 
+# ── Aggregate/constituent rule ───────────────────────────────────────────────
+#
+# "X wins the US Open" implies "X wins a Grand Slam"; "X wins The Open" implies
+# "X wins a major". Every pair that has ever produced a BUY is this shape, and
+# it was the one profitable family the lattice rules above leave to the LLM.
+#
+# No hardcoded list of slams or majors: an aggregate market enumerates its own
+# constituents in its rules text, so the rule reads Kalshi's wording and stays
+# correct when they add a tournament or name one inconsistently (Wimbledon is
+# KXATP-26WIM, but the French Open is its own series KXFOMEN).
+
+_AGGREGATE_RE = re.compile(
+    r"wins\s+(?:a|an|any\s+of\s+the\s+\w+)\s+[\w\s]*?\(([^)]+)\)", re.I)
+
+
+def _normalize_rules(text: str) -> str:
+    """Lowercase, drop periods and apostrophes, collapse whitespace.
+
+    Makes "the U.S. Open" and "US Open" the same string — the two spellings
+    appear in the aggregate's list and the constituent's own rules.
+    """
+    text = (text or "").lower().replace(".", "").replace("'", "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _constituents(rules: str) -> list[str] | None:
+    """Tournament names an aggregate market resolves on, read from its rules.
+
+    "wins a tennis major (the Australian Open, the U.S. Open, the French Open,
+    or Wimbledon)" -> ["australian open", "us open", "french open", "wimbledon"]
+
+    None when this is not an aggregate market. Deliberately does not match
+    KXGRANDSLAM's "wins all 4 tennis Grand Slams": that is a conjunction whose
+    implication runs the other way, and it has no parenthesised list.
+    """
+    m = _AGGREGATE_RE.search(rules or "")
+    if not m:
+        return None
+    names = []
+    for part in re.split(r",|\bor\b|\band\b", m.group(1)):
+        name = _normalize_rules(re.sub(r"^\s*the\s+", "", part.strip(), flags=re.I))
+        if len(name) > 3:
+            names.append(name)
+    return names or None
+
+
+def _names_constituent(rules: str, constituents: list[str]) -> str | None:
+    """The constituent this market is about, or None if it names none of them."""
+    hay = _normalize_rules(rules)
+    return next((c for c in constituents if c in hay), None)
+
+
+def _wins_constituent(rules: str, constituent: str) -> bool:
+    """True if the market resolves on WINNING that tournament.
+
+    The verb carries the whole rule. A placement or participation market at the
+    same tournament names a constituent but implies nothing about winning it:
+    "finishes top 5 (including ties) in the Masters", "makes the cut in",
+    "competes in", "qualifies for the Semifinals at".
+    """
+    hay = _normalize_rules(rules)
+    return bool(re.search(
+        r"\bwins\s+(?:the\s+)?(?:[\w']+\s+){0,3}?" + re.escape(constituent), hay))
+
+
+def aggregate_screen_pair(a: dict, b: dict) -> dict | None:
+    """Screen "wins tournament T" against "wins any of {T, ...}" for one player.
+
+    Returns a result dict, or None to defer to the LLM.
+    """
+    ca, cb = _constituents(a["rules_primary"]), _constituents(b["rules_primary"])
+    # Exactly one leg must be an aggregate. Neither means the rule does not
+    # apply; both means a question it was not built for.
+    if bool(ca) == bool(cb):
+        return None
+    agg, spec, names = (a, b, ca) if ca else (b, a, cb)
+
+    named = _names_constituent(spec["rules_primary"], names)
+    if named is None:
+        # The other leg is about some tournament the aggregate does not cover,
+        # or about something else entirely. Both are usually "none", but a
+        # conjunctive market ("wins all four") would also land here and DOES
+        # imply the aggregate — so defer rather than guess.
+        return None
+
+    base = {"ticker_a": a["ticker"], "ticker_b": b["ticker"]}
+    if not _wins_constituent(spec["rules_primary"], named):
+        return {**base, "antecedent_ticker": None, "consequent_ticker": None,
+                "confidence": "none",
+                "reasoning": (f"rule: {spec['series_ticker']} is about {named} but does "
+                              f"not resolve on winning it, so it neither implies nor "
+                              f"follows from {agg['series_ticker']}")}
+    return {**base,
+            "antecedent_ticker": spec["ticker"], "consequent_ticker": agg["ticker"],
+            "confidence": "high",
+            "reasoning": (f"rule: winning {named} is one of the outcomes "
+                          f"{agg['series_ticker']} resolves on, same player")}
+
+
 def rule_screen_pairs(pairs: list[tuple[dict, dict]]) -> tuple[list[dict], list[tuple[dict, dict]]]:
     """Split pairs into (rule_results, remaining_for_llm)."""
     results, remaining = [], []
     for a, b in pairs:
-        r = rule_screen_pair(a, b)
+        r = rule_screen_pair(a, b) or aggregate_screen_pair(a, b)
         if r is not None:
             results.append(r)
         else:

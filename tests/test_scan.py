@@ -13,6 +13,7 @@ from scan import (
     generate_candidate_pairs,
     rule_screen_pair,
     rule_screen_pairs,
+    aggregate_screen_pair,
 )
 
 
@@ -259,6 +260,120 @@ def test_rule_screen_pairs_split():
     ]
     results, remaining = rule_screen_pairs(pairs)
     assert len(results) == 1 and results[0]["confidence"] == "high"
+    assert len(remaining) == 1 and remaining[0][0]["ticker"] == "T1"
+
+
+# ── Aggregate/constituent rule ───────────────────────────────────────────────
+
+# Verbatim Kalshi wording: the rule reads these strings, so paraphrasing them
+# in a test would stop testing what production does.
+_SLAM_AGG = ("If Ben Shelton wins a tennis major (the Australian Open, the U.S. "
+             "Open, the French Open, or Wimbledon) before Dec 31, 2026, then the "
+             "market resolves to Yes.")
+_MAJOR_AGG = ("If Adam Scott wins any of the four golf major tournaments (The "
+              "Masters, the PGA Championship, the U.S. Open, and The Open "
+              "Championship) in 2026, then the market resolves to Yes.")
+
+
+def _leg(ticker, series, rules, event="E1"):
+    return {"ticker": ticker, "series_ticker": series, "event_ticker": event,
+            "title": f"Title {ticker}", "rules_primary": rules}
+
+
+def test_aggregate_constituent_win_implies_aggregate():
+    r = aggregate_screen_pair(
+        _leg("KXATPGRANDSLAM-26-BSHE", "KXATPGRANDSLAM", _SLAM_AGG),
+        _leg("KXATP-26USO-SHE", "KXATP",
+             "If Ben Shelton wins the 2026 US Open Men's Singles professional "
+             "tennis tournament, then the market resolves to Yes."))
+    assert r["confidence"] == "high"
+    # The specific tournament is the antecedent, regardless of argument order.
+    assert r["antecedent_ticker"] == "KXATP-26USO-SHE"
+    assert r["consequent_ticker"] == "KXATPGRANDSLAM-26-BSHE"
+
+
+def test_aggregate_direction_independent_of_argument_order():
+    args = (_leg("KXPGAMAJORWIN-26-AS", "KXPGAMAJORWIN", _MAJOR_AGG),
+            _leg("KXPGATOUR-THOC26-AS", "KXPGATOUR",
+                 "If Adam Scott wins the The Open Championship, then the market "
+                 "resolves to Yes."))
+    fwd, rev = aggregate_screen_pair(*args), aggregate_screen_pair(*reversed(args))
+    assert fwd["antecedent_ticker"] == rev["antecedent_ticker"] == "KXPGATOUR-THOC26-AS"
+
+
+def test_aggregate_spelling_normalised():
+    """The aggregate says "the U.S. Open"; the constituent says "US Open"."""
+    r = aggregate_screen_pair(
+        _leg("KXPGAMAJORWIN-26-AS", "KXPGAMAJORWIN", _MAJOR_AGG),
+        _leg("KXPGATOUR-USO26-AS", "KXPGATOUR",
+             "If Adam Scott wins the US Open, then the market resolves to Yes."))
+    assert r["confidence"] == "high"
+
+
+def test_aggregate_placement_at_a_major_is_none():
+    """Names a major, but finishing top 5 there implies nothing about winning."""
+    r = aggregate_screen_pair(
+        _leg("KXPGAMAJORWIN-26-AS", "KXPGAMAJORWIN", _MAJOR_AGG),
+        _leg("KXPGATOP5-MAST26-AS", "KXPGATOP5",
+             "If Adam Scott finishes top 5 (including ties) in the 2026 Masters "
+             "Tournament golf tournament, then the market resolves to Yes."))
+    assert r["confidence"] == "none"
+    assert r["antecedent_ticker"] is None
+
+
+def test_aggregate_participation_at_a_major_is_none():
+    r = aggregate_screen_pair(
+        _leg("KXPGAMAJORWIN-26-AS", "KXPGAMAJORWIN", _MAJOR_AGG),
+        _leg("KXPGAMASTERS-26-AS", "KXPGAMASTERS",
+             "If Adam Scott competes in The Masters in 2026, then the market "
+             "resolves to Yes."))
+    assert r["confidence"] == "none"
+
+
+def test_aggregate_non_major_tournament_defers():
+    """The Genesis Scottish Open is not a major, so the rule abstains.
+
+    Production LLM labels called this pair "high" while their own reasoning
+    denied any implication; abstaining keeps that judgment where it was rather
+    than encoding a guess.
+    """
+    assert aggregate_screen_pair(
+        _leg("KXPGAMAJORWIN-26-RFOX", "KXPGAMAJORWIN", _MAJOR_AGG),
+        _leg("KXPGATOUR-GESO26-RFOX", "KXPGATOUR",
+             "If Ryan Fox wins the Genesis Scottish Open, then the market "
+             "resolves to Yes.")) is None
+
+
+def test_aggregate_conjunctive_market_defers():
+    """"Wins all 4" does imply "wins a Slam" — but the direction is not the
+    one this rule encodes, so it must defer rather than answer "none"."""
+    assert aggregate_screen_pair(
+        _leg("KXATPGRANDSLAM-26-CALC", "KXATPGRANDSLAM", _SLAM_AGG),
+        _leg("KXGRANDSLAM-CALC26", "KXGRANDSLAM",
+             "If Carlos Alcaraz wins all 4 tennis Grand Slams in 2026, then the "
+             "market resolves to Yes.")) is None
+
+
+def test_aggregate_requires_exactly_one_aggregate_leg():
+    both = _leg("KXATPGRANDSLAM-26-A", "KXATPGRANDSLAM", _SLAM_AGG)
+    assert aggregate_screen_pair(both, dict(both, ticker="KXATPGRANDSLAM-26-B")) is None
+    plain = _leg("T1", "S1", "Rules")
+    assert aggregate_screen_pair(plain, _leg("T2", "S2", "Rules")) is None
+
+
+def test_rule_screen_pairs_routes_aggregate_pairs():
+    """Both rule families flow through the same split."""
+    pairs = [
+        (_golf("KXPGATOP5", "MAST26"), _golf("KXPGATOP10", "MAST26")),
+        (_leg("KXPGAMAJORWIN-26-AS", "KXPGAMAJORWIN", _MAJOR_AGG),
+         _leg("KXPGATOUR-THOC26-AS", "KXPGATOUR",
+              "If Adam Scott wins the The Open Championship, then the market "
+              "resolves to Yes.")),
+        (_market("T1", "S1"), _market("T2", "S2")),
+    ]
+    results, remaining = rule_screen_pairs(pairs)
+    assert len(results) == 2
+    assert {r["confidence"] for r in results} == {"high"}
     assert len(remaining) == 1 and remaining[0][0]["ticker"] == "T1"
 
 

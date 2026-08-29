@@ -85,14 +85,20 @@ case "$JOB" in
       scan.py --category Sports --max-pairs 0 --db "$DB" --log-file -
     ;;
 
-  # 08:00 UTC — the main pass: yields, then an LLM screen, then both
-  # evaluation modes over what it found.
+  # 08:00 UTC — the main pass: yields, then screening, then both evaluation
+  # modes over what it found.
+  #
+  # --max-pairs 0 skips the LLM: the rule screener and structural reuse still
+  # run and persist first, so this screens for free. The rules cover the
+  # aggregate/constituent family (US Open -> a Grand Slam), which is every pair
+  # that has ever produced a BUY. Everything the LLM would add on top has never
+  # closed below parity. Drop the flag to re-enable paid screening.
   daily)
     step "fetch yields" \
       fetch_yields.py --db "$DB"
     step "scan" \
       scan.py --from-db --filter "tennis,hockey,golf" --min-volume 200 \
-              --db "$DB" --log-file -
+              --max-pairs 0 --db "$DB" --log-file -
     step "evaluate" \
       evaluate.py --db "$DB" --log-file -
     step "evaluate high" \
