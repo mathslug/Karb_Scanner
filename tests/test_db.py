@@ -270,6 +270,32 @@ def test_get_pairs_yield_includes_est_fees(conn):
     assert pair["annualized_yield"] < fee_free
 
 
+def test_rules_secondary_round_trips(conn):
+    """Kalshi puts walkover, forfeit and postponement terms in rules_secondary.
+    Whether an implication holds can turn on that text, so it must persist."""
+    secondary = ("If the match does not occur due to a player injury, walkover, "
+                 "forfeiture, or any other cancellation, the market will resolve "
+                 "to a fair price.")
+    db.upsert_tickers(conn, [_make_market(ticker="M1", series_ticker="S1",
+                                          rules_secondary=secondary)])
+    assert conn.execute(
+        "SELECT rules_secondary FROM tickers WHERE ticker='M1'").fetchone()[0] == secondary
+    # Update path carries it too, and an absent key does not wipe the column.
+    db.upsert_tickers(conn, [_make_market(ticker="M1", series_ticker="S1",
+                                          rules_secondary=secondary)])
+    assert conn.execute(
+        "SELECT rules_secondary FROM tickers WHERE ticker='M1'").fetchone()[0] == secondary
+    # get_tickers_by_entity needs an entity spanning 2+ events, so seed a
+    # second one — otherwise the grouping is empty and asserts nothing.
+    db.upsert_tickers(conn, [_make_market(ticker="M2", series_ticker="S2",
+                                          event_ticker="EVENT-2",
+                                          rules_secondary=secondary)])
+    groups = db.get_tickers_by_entity(conn, min_volume=0)
+    markets = [m for ms in groups.values() for m in ms]
+    assert markets, "expected the entity grouping to be non-empty"
+    assert all(m["rules_secondary"] == secondary for m in markets)
+
+
 # ── exclude_expired ──────────────────────────────────────────────────────────
 
 

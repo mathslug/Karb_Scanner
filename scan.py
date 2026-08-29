@@ -171,6 +171,7 @@ def fetch_and_store_markets(category: str, conn, filter_tags: list[str] | None =
                     "title": m.get("title", ""),
                     "yes_sub_title": m.get("yes_sub_title", ""),
                     "rules_primary": m.get("rules_primary", ""),
+                    "rules_secondary": m.get("rules_secondary", ""),
                     "expected_expiration_time": m.get("expected_expiration_time", ""),
                     "close_time": m.get("close_time", ""),
                     "last_price_dollars": m.get("last_price_dollars"),
