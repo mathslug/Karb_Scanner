@@ -294,7 +294,7 @@ the unit failed rather than burying it in a log.
 | UTC | Unit | Job |
 |-----|------|-----|
 | 07:35 | `karb-job@sports` | `scan.py --category Sports --max-pairs 0` -- fetch all sports tickers into DB (no LLM) |
-| 08:00 | `karb-job@daily` | `fetch_yields.py` + `scan.py --from-db --filter "tennis,hockey,golf" --min-volume 200` (rule screener + Anthropic LLM) + `evaluate.py` + `evaluate.py --mode high` |
+| 08:00 | `karb-job@daily` | `fetch_yields.py` + `scan.py --from-db --filter "tennis,hockey,golf" --min-volume 200 --max-pairs 0` (rule screener + structural reuse; **no LLM**) + `evaluate.py` + `evaluate.py --mode high` |
 | 15:00, 20:00 | `karb-job@sweep` | `evaluate.py` + `evaluate.py --mode high` -- full re-evaluation sweeps against fresh orderbooks |
 | hourly at :30 | `karb-job@hot` | `evaluate.py --hot` (+ `--mode high`) -- re-check near-parity pairs only (latest tob_cost < 1.03) |
 
@@ -302,6 +302,32 @@ A clean run touches `/var/lib/rpi-health/jobs/karb.<job>`. The Pi's dashboard
 watches the *age* of those files, which catches both a job that fails and a job
 that has stopped being scheduled. Thresholds live in `JOB_RECEIPTS` in
 `karb.conf`.
+
+### LLM screening is off
+
+The daily scan passes `--max-pairs 0`, which skips the LLM. The rule screener
+and structural reuse still run and persist first — screening happens, it just
+costs nothing. `--max-pairs 0` returns after those steps, and
+`anthropic.Anthropic()` is constructed lazily inside `_call_anthropic`, so a
+run makes no API call and needs no key.
+
+This is safe because the rules cover the aggregate/constituent family, which is
+every pair that has ever produced a BUY. What is given up is discovery of
+market structures the rules do not know; those pairs stay unscreened (~50-60 a
+day) rather than being marked `none`, and are picked up whenever the LLM runs
+again.
+
+**To turn it back on:** drop `--max-pairs 0` from the `daily` case in
+`deploy/run-jobs.sh`, and make sure `ANTHROPIC_API_KEY` is set in
+`~/.config/karb.env` on the Pi. Nothing else was removed — `screen_pairs_with_llm`,
+both backends and the GPU orchestrators are all still there. The accumulated
+backlog is screened on the first run, so expect a larger bill than a normal day.
+
+For a one-off without changing the schedule:
+
+```
+uv run scan.py --from-db --filter "tennis,hockey,golf" --min-volume 200
+```
 
 ### Backups
 
