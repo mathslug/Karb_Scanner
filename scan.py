@@ -275,16 +275,27 @@ def generate_candidate_pairs(groups: dict[str, list[dict]]) -> list[tuple[dict, 
 
 RULE_SCREENER_MODEL = "rule-screener-v1"
 
-# Ordered narrow -> broad: entry i implies entry j (i < j) for the same
-# player in the same tournament.
-_LATTICES = [
-    ["KXPGATOUR", "KXPGATOP5", "KXPGATOP10", "KXPGATOP20", "KXPGAMAKECUT"],
-    ["KXPGAR1LEAD", "KXPGAR1TOP5", "KXPGAR1TOP10"],
-    ["KXLIVTOUR", "KXLIVTOP5", "KXLIVTOP10"],
-]
+# Per tour, ordered narrow -> broad: entry i implies entry j (i < j) for the
+# same player in the same tournament.
+_LATTICES = {
+    "PGA": [
+        ["KXPGATOUR", "KXPGATOP5", "KXPGATOP10", "KXPGATOP20", "KXPGAMAKECUT"],
+        ["KXPGAR1LEAD", "KXPGAR1TOP5", "KXPGAR1TOP10"],
+    ],
+    "LIV": [
+        ["KXLIVTOUR", "KXLIVTOP5", "KXLIVTOP10"],
+    ],
+    "DPWT": [
+        ["KXDPWORLDTOUR", "KXDPWTTOP5", "KXDPWTTOP10", "KXDPWTTOP20", "KXDPWORLDTOURMAKECUT"],
+    ],
+}
+# Tours that co-sanction events: the same tournament is listed under both
+# tours' tickers, so a ticker mismatch doesn't rule out implication.
+_CO_SANCTIONED = {frozenset({"PGA", "DPWT"})}
 _LATTICE_RANK = {
-    series: (fam_idx, rank)
-    for fam_idx, fam in enumerate(_LATTICES)
+    series: (tour, fam_idx, rank)
+    for tour, fams in _LATTICES.items()
+    for fam_idx, fam in enumerate(fams)
     for rank, series in enumerate(fam)
 }
 
@@ -301,6 +312,8 @@ def rule_screen_pair(a: dict, b: dict) -> dict | None:
     rb = _LATTICE_RANK.get(b["series_ticker"])
     if ra is None or rb is None:
         return None
+    if frozenset((ra[0], rb[0])) in _CO_SANCTIONED:
+        return None
     ta, tb = _tournament_suffix(a["event_ticker"]), _tournament_suffix(b["event_ticker"])
     if not ta or not tb:
         return None
@@ -310,15 +323,15 @@ def rule_screen_pair(a: dict, b: dict) -> dict | None:
         return {**base, "antecedent_ticker": None, "consequent_ticker": None,
                 "confidence": "none",
                 "reasoning": "rule: finish-position markets in different tournaments"}
-    if ra[0] != rb[0]:
+    if ra[:2] != rb[:2]:
         # Same tournament, different lattice (e.g. round-1 position vs final
         # result): neither direction is a logical necessity.
         return {**base, "antecedent_ticker": None, "consequent_ticker": None,
                 "confidence": "none",
                 "reasoning": "rule: round-position and final-result markets don't imply each other"}
-    if ra[1] == rb[1]:
+    if ra[2] == rb[2]:
         return None  # same series + tournament: shouldn't occur, defer
-    ant, con = (a, b) if ra[1] < rb[1] else (b, a)
+    ant, con = (a, b) if ra[2] < rb[2] else (b, a)
     return {**base, "antecedent_ticker": ant["ticker"], "consequent_ticker": con["ticker"],
             "confidence": "high",
             "reasoning": (f"rule: {ant['series_ticker']} is a strict subset of "

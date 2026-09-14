@@ -253,6 +253,26 @@ def test_rule_liv_lattice():
     assert r["antecedent_ticker"].startswith("KXLIVTOUR")
 
 
+def test_rule_dp_world_tour_lattice():
+    r = rule_screen_pair(_golf("KXDPWTTOP20", "OMEM26"), _golf("KXDPWTTOP5", "OMEM26"))
+    assert r["confidence"] == "high"
+    assert r["antecedent_ticker"].startswith("KXDPWTTOP5")
+    r = rule_screen_pair(_golf("KXDPWORLDTOURMAKECUT", "OMEM26"), _golf("KXDPWORLDTOUR", "OMEM26"))
+    assert r["confidence"] == "high"
+    assert r["antecedent_ticker"].startswith("KXDPWORLDTOUR-")
+
+
+def test_rule_defers_co_sanctioned_tours():
+    # A co-sanctioned event can be the same tournament under both tours' tickers
+    assert rule_screen_pair(_golf("KXPGATOUR", "GESO26"), _golf("KXDPWORLDTOUR", "GSO26")) is None
+    assert rule_screen_pair(_golf("KXPGATOP5", "GESO26"), _golf("KXDPWTTOP10", "GESO26")) is None
+
+
+def test_rule_cross_tour_none():
+    r = rule_screen_pair(_golf("KXPGATOUR", "USO26"), _golf("KXLIVTOP5", "LIDA26"))
+    assert r["confidence"] == "none"
+
+
 def test_rule_screen_pairs_split():
     pairs = [
         (_golf("KXPGATOP5", "MAST26"), _golf("KXPGATOP10", "MAST26")),
