@@ -14,6 +14,7 @@ from scan import (
     rule_screen_pair,
     rule_screen_pairs,
     aggregate_screen_pair,
+    subject_series_screen_pair,
 )
 
 
@@ -396,6 +397,42 @@ def test_rule_screen_pairs_routes_aggregate_pairs():
     assert {r["confidence"] for r in results} == {"high"}
     assert len(remaining) == 1 and remaining[0][0]["ticker"] == "T1"
 
+
+
+# ── One-event-per-subject series ─────────────────────────────────────────────
+
+
+def _team_pts(team, rung=100):
+    return {"ticker": f"KXNHLSEASONPTS-27{team}-{rung}", "series_ticker": "KXNHLSEASONPTS",
+            "event_ticker": f"KXNHLSEASONPTS-27{team}",
+            "rules_primary": f"If the {team} earn at least {rung} points in the 2026-27 "
+                             f"regular season, then the market resolves to Yes."}
+
+
+def test_subject_series_different_teams_none():
+    r = subject_series_screen_pair(_team_pts("WPG"), _team_pts("WSH"))
+    assert r["confidence"] == "none"
+    assert r["antecedent_ticker"] is None
+
+
+def test_subject_series_same_team_ladder_defers():
+    # 110+ points does imply 100+ for the same team; not this rule's call
+    assert subject_series_screen_pair(_team_pts("WPG", 110), _team_pts("WPG", 100)) is None
+
+
+def test_subject_series_defers_unlisted_series():
+    # Same shape, opposite answer: NATSTAGE events are rounds of one tournament
+    a = {"ticker": "KXATPNATSTAGE-26USOQF-1", "series_ticker": "KXATPNATSTAGE",
+         "event_ticker": "KXATPNATSTAGE-26USOQF"}
+    b = {"ticker": "KXATPNATSTAGE-26USOSF-1", "series_ticker": "KXATPNATSTAGE",
+         "event_ticker": "KXATPNATSTAGE-26USOSF"}
+    assert subject_series_screen_pair(a, b) is None
+    assert subject_series_screen_pair(_team_pts("WPG"), _golf("KXPGATOUR", "MAST27")) is None
+
+
+def test_rule_screen_pairs_routes_subject_series_pairs():
+    results, remaining = rule_screen_pairs([(_team_pts("BOS"), _team_pts("TOR"))])
+    assert len(results) == 1 and results[0]["confidence"] == "none" and not remaining
 
 def test_numeric_entity_blocked():
     groups = {"6": [

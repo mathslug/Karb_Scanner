@@ -437,11 +437,39 @@ def aggregate_screen_pair(a: dict, b: dict) -> dict | None:
                           f"{agg['series_ticker']} resolves on, same player")}
 
 
+# ── One-event-per-subject series ─────────────────────────────────────────────
+#
+# In these series each EVENT is one team and its markets are a threshold
+# ladder ("WPG Jets earn at least 100 points"). The ladder rung is the
+# yes_sub_title ("100+ points"), so entity grouping pairs the same rung across
+# two events — two different teams — and neither implies the other.
+#
+# Listed, not inferred from a threshold-shaped yes_sub_title: KXATPNATSTAGE has
+# the same shape ("1+ Americans" in two events), but there the events are rounds
+# of one tournament and the pairs DO imply each other.
+_ONE_SUBJECT_PER_EVENT = {"KXNHLSEASONPTS"}
+
+
+def subject_series_screen_pair(a: dict, b: dict) -> dict | None:
+    """'none' for two events of a one-event-per-subject series; else None."""
+    s = a["series_ticker"]
+    if s != b["series_ticker"] or s not in _ONE_SUBJECT_PER_EVENT:
+        return None
+    if a["event_ticker"] == b["event_ticker"]:
+        return None  # same subject, different rung: a real ladder, defer
+    return {"ticker_a": a["ticker"], "ticker_b": b["ticker"],
+            "antecedent_ticker": None, "consequent_ticker": None,
+            "confidence": "none",
+            "reasoning": f"rule: {s} events are different teams; one team's "
+                         f"threshold says nothing about another's"}
+
+
 def rule_screen_pairs(pairs: list[tuple[dict, dict]]) -> tuple[list[dict], list[tuple[dict, dict]]]:
     """Split pairs into (rule_results, remaining_for_llm)."""
     results, remaining = [], []
     for a, b in pairs:
-        r = rule_screen_pair(a, b) or aggregate_screen_pair(a, b)
+        r = (rule_screen_pair(a, b) or aggregate_screen_pair(a, b)
+             or subject_series_screen_pair(a, b))
         if r is not None:
             results.append(r)
         else:
