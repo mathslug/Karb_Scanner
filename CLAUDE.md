@@ -36,7 +36,7 @@ Twelve code files + templates + container/deploy files + tests:
 
 - **`deploy/`** -- `karb.container` (Quadlet unit for the web UI), `units/` (one templated job service + four timers), `run-jobs.sh` (runs one scheduled job as short-lived containers). Retired droplet-era files kept for reference only: `cloud-init.yml`, `rebuild.sh`, `run.sh`, `slonk-arb.cron`. `run_scan_gpu.sh` provisions the LLM backend via the orchestrator named in `SLONK_LLM_ORCH` (default `gpu_droplet.py`), runs the scan against it with the orchestrator-provided `LLM_MODEL`, and always destroys it (trap on EXIT); unused while the GPU backends are quota-blocked.
 
-- **`tests/`** -- 181 pytest tests, no network. Run with `uv run pytest`.
+- **`tests/`** -- 187 pytest tests, no network. Run with `uv run pytest`.
 
 - **`scripts/`** -- helper scripts for operations (`pull_prod.sh`, `db_summary.py`, `check_server.sh`, `log_errors.sh`, `pair_details.py`). `pull_prod.sh` and `check_server.sh` target the Pi.
 
@@ -135,6 +135,10 @@ Before any LLM call, `rule_screen_pairs()` decides pairs whose answer is determi
 The governing verb carries the rule: the other leg must resolve on *winning* a named constituent. A placement or participation market at the same tournament ("finishes top 5 in the Masters", "competes in The Masters") names a major but implies nothing about winning one — ignoring the verb drops agreement from 99.6% to 73%.
 
 It fails closed. When the other leg names no constituent at all it returns `None` and defers, rather than answering `none` — that keeps conjunctive markets like `KXGRANDSLAM` ("wins *all 4*"), whose implication runs the other way, out of the rule's hands. Validated against every stored LLM label: 885 pairs decided (144 high, 741 none), 507 comparable to a real LLM verdict, **100% agreement, zero direction mismatches**, and all 13 historical BUY-producing pairs recovered as `high`.
+
+It reads both list styles Kalshi uses — "(the X, the Y, or the Z)" and KXGOLFMAJOR's "(including X, Y, and Z)". And it defers when the tournament leg expires after the aggregate does: constituent rules rarely state a year ("wins the Masters Tournament"), so without that check next year's Masters would count toward this year's majors. Expirations rather than parsed years, because Kalshi words years inconsistently; replayed over all 37,804 stored pairs, the check removes none of the rule's existing 1,053 decisions.
+
+`subject_series_screen_pair()` answers `none` for two events of a series listed in `_ONE_SUBJECT_PER_EVENT` (`KXNHLSEASONPTS`): each event is one team with a points ladder, so entity grouping on the rung ("100+ points") pairs two different teams. Listed rather than inferred from threshold-shaped entities — `KXATPNATSTAGE` has the same shape and real implications, because its events are rounds of one tournament.
 
 ### LLM screening
 

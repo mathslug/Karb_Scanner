@@ -382,6 +382,34 @@ def test_aggregate_requires_exactly_one_aggregate_leg():
     assert aggregate_screen_pair(plain, _leg("T2", "S2", "Rules")) is None
 
 
+_GOLF_MAJOR_AGG = ("If Scottie Scheffler wins a golf major championship (including The "
+                   "Masters, PGA Championship, U.S. Open, and The Open Championship) in "
+                   "2027, then the market resolves to Yes.")
+_MASTERS = "If Scottie Scheffler wins the Masters Tournament, then the market resolves to Yes."
+
+
+def test_aggregate_reads_including_list():
+    agg = dict(_leg("KXGOLFMAJOR-27-SSCH", "KXGOLFMAJOR", _GOLF_MAJOR_AGG),
+               expected_expiration_time="2027-12-31T15:00:00Z")
+    mast = dict(_leg("KXPGATOUR-MAST27-SSCH", "KXPGATOUR", _MASTERS),
+                expected_expiration_time="2027-04-11T23:00:00Z")
+    r = aggregate_screen_pair(agg, mast)
+    assert r["confidence"] == "high"
+    assert r["antecedent_ticker"] == "KXPGATOUR-MAST27-SSCH"
+    assert r["consequent_ticker"] == "KXGOLFMAJOR-27-SSCH"
+
+
+def test_aggregate_defers_constituent_settling_after_the_aggregate():
+    # Next year's Masters names a major but is outside "in 2027"; the Masters
+    # rules carry no year, so only the expirations tell them apart.
+    agg = dict(_leg("KXGOLFMAJOR-27-SSCH", "KXGOLFMAJOR", _GOLF_MAJOR_AGG),
+               expected_expiration_time="2027-12-31T15:00:00Z")
+    mast28 = dict(_leg("KXPGATOUR-MAST28-SSCH", "KXPGATOUR", _MASTERS),
+                  expected_expiration_time="2028-04-09T23:00:00Z")
+    assert aggregate_screen_pair(agg, mast28) is None
+    assert aggregate_screen_pair(mast28, agg) is None
+
+
 def test_rule_screen_pairs_routes_aggregate_pairs():
     """Both rule families flow through the same split."""
     pairs = [

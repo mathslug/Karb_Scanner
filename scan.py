@@ -378,7 +378,11 @@ def _constituents(rules: str) -> list[str] | None:
         return None
     names = []
     for part in re.split(r",|\bor\b|\band\b", m.group(1)):
-        name = _normalize_rules(re.sub(r"^\s*the\s+", "", part.strip(), flags=re.I))
+        # "(including The Masters, PGA Championship, ...)" — KXGOLFMAJOR's
+        # wording. Without this the first name is "including the masters",
+        # which no constituent's rules contain.
+        part = re.sub(r"^\s*including\s+", "", part.strip(), flags=re.I)
+        name = _normalize_rules(re.sub(r"^\s*the\s+", "", part, flags=re.I))
         if len(name) > 3:
             names.append(name)
     return names or None
@@ -414,6 +418,16 @@ def aggregate_screen_pair(a: dict, b: dict) -> dict | None:
     if bool(ca) == bool(cb):
         return None
     agg, spec, names = (a, b, ca) if ca else (b, a, cb)
+
+    # The aggregate covers one window ("in 2027", "before Dec 31, 2026"), and a
+    # constituent's rules rarely say which year they are ("wins the Masters
+    # Tournament"). A tournament that settles after the aggregate does cannot be
+    # one of its outcomes: next year's Masters against this year's majors.
+    # Compared on expiration rather than parsed years, which Kalshi words
+    # inconsistently. Defers rather than answering — the timestamps are a proxy.
+    spec_exp, agg_exp = spec.get("expected_expiration_time"), agg.get("expected_expiration_time")
+    if spec_exp and agg_exp and spec_exp > agg_exp:
+        return None
 
     named = _names_constituent(spec["rules_primary"], names)
     if named is None:
