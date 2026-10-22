@@ -26,8 +26,6 @@ Twelve code files + templates + container/deploy files + tests:
 
 - **`notify.py`** -- sends email notifications for BUY recommendations via Gmail SMTP. Called by `evaluate.py`.
 
-- **`snapshot.py`** -- writes a consistent copy of the live DB to `/data/.backup.db` via `VACUUM INTO`. Run inside the container by the off-box backup so it sees the same file the app has open; a plain file copy of a WAL database silently loses everything since the last checkpoint.
-
 - **`healthcheck.py`** -- container health probe; exits 0 if `/healthz` answers.
 
 - **`templates/`** -- Jinja2 templates (`base.html`, `review.html`, `detail.html`, `trades.html`, `evaluations.html`, `settings.html`) using Pico CSS.
@@ -346,8 +344,8 @@ uv run scan.py --from-db --filter "tennis,hockey,golf" --min-volume 200
 ### Backups
 
 `~/src/rpi/backup/pull-backups.sh` runs daily on the Mac and pulls, rather than
-the Pi pushing. It runs `snapshot.py` *inside* the container (`VACUUM INTO`,
-never a file copy — WAL means copying the main file yields a valid but
+the Pi pushing. It snapshots the database on the Pi with `VACUUM INTO` (never
+a file copy — WAL means copying the main file yields a valid but
 incomplete database), retrieves it gzipped, verifies the copy it kept, and
 writes a dated snapshot under `~/src/rpi/backups/`.
 
