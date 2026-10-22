@@ -37,7 +37,7 @@ ssh "$PI" "curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://127.0.0.1:8000/h
 
 echo ""
 echo "==> Job receipts (age of last clean run):"
-# JOB_RECEIPTS in ~/src/rpi/apps/karb.conf sets the tolerated staleness.
+# JOB_RECEIPTS in ~/src/server_setup/apps/karb.conf sets the tolerated staleness.
 ssh "$PI" 'for f in /var/lib/rpi-health/jobs/karb.*; do
     [ -e "$f" ] || { echo "  none"; break; }
     printf "  %-24s %sh ago\n" "$(basename "$f")" "$(( ( $(date +%s) - $(cat "$f") ) / 3600 ))"

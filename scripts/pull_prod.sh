@@ -5,25 +5,25 @@
 #
 #     bash scripts/pull_prod.sh
 #
-# Snapshots come from ~/src/rpi/backup/pull-backups.sh, which runs daily.
+# Snapshots come from ~/src/server_setup/backup/pull-backups.sh, which runs daily.
 # Logs are in the Pi's journal, not files:
 #     ssh mypi-remote 'journalctl --user-unit "karb-*" --since "2 days ago"'
 set -euo pipefail
 
-SNAPSHOT="${KARB_SNAPSHOT:-${HOME}/src/rpi/backups/latest/karb/slonk_arb.db.gz}"
+SNAPSHOT="${KARB_SNAPSHOT:-${HOME}/src/server_setup/backups/latest/karb/slonk_arb.db.gz}"
 LOCAL_DB="${SLONK_DB:-slonk_arb.db}"
 STALE_HOURS="${KARB_STALE_HOURS:-36}"
 
 if [ ! -f "$SNAPSHOT" ]; then
     echo "No snapshot at $SNAPSHOT" >&2
-    echo "Refresh with: ~/src/rpi/backup/pull-backups.sh" >&2
+    echo "Refresh with: ~/src/server_setup/backup/pull-backups.sh" >&2
     exit 1
 fi
 
-age_h=$(( ( $(date +%s) - $(stat -f %m "$SNAPSHOT" 2>/dev/null || stat -c %Y "$SNAPSHOT") ) / 3600 ))
+age_h=$(( ( $(date +%s) - $(stat -c %Y "$SNAPSHOT") ) / 3600 ))
 echo "==> Snapshot: $SNAPSHOT (${age_h}h old)"
 if [ "$age_h" -gt "$STALE_HOURS" ]; then
-    echo "    STALE (>${STALE_HOURS}h). Refresh with: ~/src/rpi/backup/pull-backups.sh" >&2
+    echo "    STALE (>${STALE_HOURS}h). Refresh with: ~/src/server_setup/backup/pull-backups.sh" >&2
 fi
 
 if [ -f "$LOCAL_DB" ]; then

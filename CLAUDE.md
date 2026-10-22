@@ -246,9 +246,9 @@ inbound path, so `karb.mathslug.com` resolves to Cloudflare and does **not**
 accept SSH. Reach the host itself with the `mypi` (LAN) or `mypi-remote`
 (tunnel) ssh aliases.
 
-The `~/src/rpi` repo owns the machine; `~/src/rpi/apps/karb.conf` is the single
-source of truth for this app's hostname, port, data directory, units, backup
-command and job thresholds. Deploys, auto-deploy, backups, the health dashboard
+The `~/src/server_setup` repo owns the machine; `~/src/server_setup/apps/karb.conf`
+is the single source of truth for this app's hostname, port, data directory,
+units, backup database and job thresholds. Deploys, auto-deploy, backups, the health dashboard
 and the tunnel ingress all read it, so changing where karb lives means editing
 that file, not five scripts.
 
@@ -282,7 +282,7 @@ halfway through, and a crashed web app does not silently stop the scanner.
 
 Pull-based: nothing can reach the Pi from outside. A timer runs `git ls-remote`
 every 15 minutes and rebuilds only when the branch has moved
-(`~/src/rpi/auto-deploy.sh`). The test suite runs at image build time, so a
+(`~/src/server_setup/auto-deploy.sh`). The test suite runs at image build time, so a
 failing suite fails the build and the previous container keeps serving.
 
 `.github/workflows/deploy.yml` is retired and manual-trigger only.
@@ -343,11 +343,11 @@ uv run scan.py --from-db --filter "tennis,hockey,golf" --min-volume 200
 
 ### Backups
 
-`~/src/rpi/backup/pull-backups.sh` runs daily on the Mac and pulls, rather than
-the Pi pushing. It snapshots the database on the Pi with `VACUUM INTO` (never
+`~/src/server_setup/backup/pull-backups.sh` runs daily on the laptop and pulls,
+rather than the Pi pushing. It snapshots the database on the Pi with `VACUUM INTO` (never
 a file copy — WAL means copying the main file yields a valid but
 incomplete database), retrieves it gzipped, verifies the copy it kept, and
-writes a dated snapshot under `~/src/rpi/backups/`.
+writes a dated snapshot under `~/src/server_setup/backups/`.
 
 `scripts/pull_prod.sh` decompresses the newest of those into the working tree.
 It does not touch production.
