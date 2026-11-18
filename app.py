@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Flask webapp for reviewing Kalshi arbitrage candidate pairs."""
 
+import hmac
 import os
 import sqlite3
 from functools import wraps
@@ -39,7 +40,9 @@ def create_app(db_path: str = DB_PATH) -> Flask:
         if not ADMIN_PASSWORD:
             return False
         auth = request.authorization
-        return auth and auth.password == ADMIN_PASSWORD
+        return bool(auth and auth.password) and hmac.compare_digest(
+            auth.password.encode(), ADMIN_PASSWORD.encode()
+        )
 
     def _safe_next(target):
         """Only allow same-site relative redirect targets ("//" is scheme-relative)."""
